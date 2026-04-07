@@ -8,7 +8,6 @@ $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Privilege = $Identity.Split('\')[-1]
 [Console]::Title = "Albus Playbook - $Privilege"
 
-
 $ErrorActionPreference     = "SilentlyContinue"
 [Console]::OutputEncoding   = [System.Text.Encoding]::UTF8
 
