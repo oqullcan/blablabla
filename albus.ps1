@@ -920,10 +920,13 @@ $PowerSettings = @(
     "2a737441-1930-4402-8d77-b2bebba308a3 d4e98f31-5ffe-4ce1-be31-1b38b384c009 0"    # USB3 Link Power
 )
 foreach ($S in $PowerSettings) {
-    powercfg /setacvalueindex $UltimateGUID $S | Out-Null
-    powercfg /setdcvalueindex $UltimateGUID $S | Out-Null
+    if ($S -match '^#') { continue }
+    $P = $S -split ' '
+    powercfg /setacvalueindex $UltimateGUID $P[0] $P[1] $P[2] | Out-Null
+    powercfg /setdcvalueindex $UltimateGUID $P[0] $P[1] $P[2] | Out-Null
 }
 powercfg /setactive $UltimateGUID | Out-Null
+
 
 # UI: Force Tray Icon Visibility
 Status "enforcing unified taskbar icon visibility (all show)..." "step"
@@ -950,22 +953,15 @@ try {
         & $CSC -out:$ExeFile $CSFile -WindowStyle Hidden | Out-Null
         
         # Service Management
-        $OldSvc = "Set Timer Resolution Service"
         $NewSvc = "Albus Services"
-        
-        if (Get-Service -Name $OldSvc -ErrorAction SilentlyContinue) {
-            cmd /c "sc stop `"$OldSvc`" >nul 2>&1"
-            cmd /c "sc delete `"$OldSvc`" >nul 2>&1"
-            Start-Sleep -Seconds 1
-        }
 
         # Create & Start New Service
         if (Test-Path $ExeFile) {
             if (-not (Get-Service -Name $NewSvc -ErrorAction SilentlyContinue)) {
-                New-Service -Name $NewSvc -BinaryPathName $ExeFile -DisplayName $NewSvc -Description "Albus High Performance Timer Resolution" -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
+                New-Service -Name $NewSvc -BinaryPathName $ExeFile -DisplayName $NewSvc -Description "Albus Services" -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
             }
             Start-Service -Name $NewSvc -ErrorAction SilentlyContinue | Out-Null
-            Status "albus timer resolution service is active." "done"
+            Status "albus timer resolution service and audio is active." "done"
         }
     }
 } catch { Status "failed to deploy albus services online." "warn" }
@@ -1137,7 +1133,7 @@ try {
 # Cleanup Edge leftovers
 $EdgeLeftovers = @(
     "$env:SystemRoot\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
-    "$env:ProgramFiles (x86)\Microsoft", # Aggressive
+    "$env:ProgramFiles (x86)\Microsoft",
     "$env:SystemDrive\Windows\System32\config\systemprofile\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"
 )
 $EdgeLeftovers | ForEach-Object { if (Test-Path $_) { Remove-Item -Path $_ -Recurse -Force -ErrorAction SilentlyContinue } }
@@ -1275,16 +1271,14 @@ Get-ChildItem $TaskFiles -ErrorAction SilentlyContinue | Where-Object { $_.Name 
 # =============================================================================================================================================================================
 
 function Show-GPU-Menu {
-    Clear-Host
-    Write-Host "====================================================" -ForegroundColor Cyan
-    Write-Host "          INSTALL GRAPHICS DRIVERS (DEBLOAT)" -ForegroundColor Yellow
-    Write-Host "====================================================" -ForegroundColor Cyan
-    Write-Host " SELECT YOUR SYSTEM'S GPU:" -ForegroundColor Yellow
-    Write-Host " 1. NVIDIA (Automated Debloat)" -ForegroundColor Green
-    Write-Host " 2. AMD (Automated Debloat)" -ForegroundColor Red
-    Write-Host " 3. SKIP / FINISH" -ForegroundColor Gray
-    Write-Host "====================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "`n select graphics drivers" -ForegroundColor Yellow
+    Write-Host " 1. nvidia" -ForegroundColor Green
+    Write-Host " 2. amd" -ForegroundColor Red
+    Write-Host " 3. skip`n" -ForegroundColor Gray
+    Write-Host ""
 }
+
 
 :GPULoop while ($true) {
     Show-GPU-Menu
@@ -1292,7 +1286,6 @@ function Show-GPU-Menu {
     if ($Choice -match '^[1-3]$') {
         switch ($Choice) {
             1 {
-                Clear-Host
                 Status "starting NVIDIA GPU driver procedure..." "step"
                 
                 # Step 1: Download
@@ -1451,7 +1444,6 @@ function Show-GPU-Menu {
                 pause
             }
             2 {
-                Clear-Host
                 Status "starting AMD GPU driver procedure..." "step"
 
                 # Step 1: Download
