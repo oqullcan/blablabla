@@ -1189,6 +1189,48 @@ Set-Registry -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Personalizat
 Set-Registry -Path "HKCU:\Control Panel\Desktop" -Name "Wallpaper" -Value $BlackFile -Type "String"
 rundll32.exe user32.dll, UpdatePerUserSystemParameters
 
+# UI & Shell: Blackout User Account Pictures
+Status "blacking out system & user account pictures..." "step"
+$AccountPicPaths = @(
+    "$env:SystemDrive\ProgramData\Microsoft\User Account Pictures",
+    "$env:AppData\Microsoft\Windows\AccountPictures"
+)
+
+foreach ($PicPath in $AccountPicPaths) {
+    if (Test-Path $PicPath) {
+        # Backup System Defaults
+        $BackupPath = "$env:SystemDrive\ProgramData\User_Account_Pictures_Backup"
+        if ($PicPath -match "ProgramData" -and !(Test-Path $BackupPath)) {
+            Copy-Item $PicPath -Destination $BackupPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+
+        $Pics = Get-ChildItem $PicPath -Include *.png,*.bmp,*.jpg -Recurse -ErrorAction SilentlyContinue
+        foreach ($P in $Pics) {
+            try {
+                $Img = [System.Drawing.Bitmap]::FromFile($P.FullName)
+                $W = $Img.Width; $H = $Img.Height
+                $Img.Dispose()
+                
+                $NewImg = New-Object System.Drawing.Bitmap $W, $H
+                $Gfx = [System.Drawing.Graphics]::FromImage($NewImg)
+                $Gfx.Clear([System.Drawing.Color]::Black)
+                $Gfx.Dispose()
+                
+                # Determine native format for saving
+                $Ext = [System.IO.Path]::GetExtension($P.FullName).ToLower()
+                $Fmt = switch ($Ext) {
+                    ".png" { [System.Drawing.Imaging.ImageFormat]::Png }
+                    ".bmp" { [System.Drawing.Imaging.ImageFormat]::Bmp }
+                    Default { [System.Drawing.Imaging.ImageFormat]::Jpeg }
+                }
+                
+                $NewImg.Save($P.FullName, $Fmt)
+                $NewImg.Dispose()
+            } catch {}
+        }
+    }
+}
+
 # UI & Shell: Context Menu Debloat
 Status "cleaning up bloated context menu items (using engine)..." "step"
 $MenuTweaks = @(
