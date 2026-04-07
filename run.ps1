@@ -43,6 +43,31 @@ try {
     Status "could not add defender exclusion. continuing anyway..." "warn"
 }
 
+# .net framework optimization (ngen)
+Status "optimizing .net framework runtimes (ngen engine)..." "info"
+$dotNetTasks = Get-ScheduledTask -TaskPath "\Microsoft\Windows\.NET Framework\" -ErrorAction SilentlyContinue
+if ($dotNetTasks) {
+    foreach ($T in $dotNetTasks) {
+        if ($T.State -eq 'Disabled') { Enable-ScheduledTask -InputObject $T | Out-Null }
+        Start-ScheduledTask -InputObject $T | Out-Null
+    }
+}
+
+$ngenPath = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+if (Test-Path "$ngenPath\ngen.exe") {
+    Set-Location $ngenPath
+    & ".\ngen.exe" executeQueuedItems /nologo | Out-Null
+    & ".\ngen.exe" update /nologo | Out-Null
+}
+
+$StalePaths = @(
+    "$env:SystemRoot\Microsoft.NET\Framework\v4.0.30319\Temporary ASP.NET Files",
+    "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\Temporary ASP.NET Files"
+)
+foreach ($P in $StalePaths) { if (Test-Path $P) { Remove-Item $P -Recurse -Force -ErrorAction SilentlyContinue } }
+Status "net optimization cycle finished successfully." "done"
+
+
 # minsudo integration
 if (-not (Test-Path $MinSudoPath)) {
     Status "minsudo not found. resolving latest binary..." "warn"
