@@ -3,7 +3,13 @@ $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Privilege = $Identity.Split('\')[-1]
 [Console]::Title = "Albus Playbook - $Privilege"
 
+$ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference     = "SilentlyContinue"
+
+function Write-Log {
+    param ([string]$Message, [ConsoleColor]$Color = "Cyan")
+    Write-Host "  :: $Message" -ForegroundColor $Color
+}
 
 $dest = "C:\Albus"
 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
