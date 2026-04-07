@@ -10,6 +10,10 @@ if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+$Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$Privilege = $Identity.Split('\')[-1]
+[Console]::Title = "Albus - $Privilege"
+
 $Env:InstallPath = "C:\Albus"
 $Paths = @{
 	TempZip = "$Env:InstallPath\NanaRun.zip"
