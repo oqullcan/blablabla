@@ -77,7 +77,6 @@ function Set-Registry {
     }
 }
 
-<#
 $dest = "C:\Albus"
 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
 
@@ -157,7 +156,6 @@ if (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction Silentl
 }
 
 # =============================================================================================================================================================================
-#>
 
 Status "executing registry optimization engine..." "step"
 
@@ -661,7 +659,108 @@ foreach ($Tweak in $Tweaks) {
     Set-Registry -Path $Tweak.Path -Name $Tweak.Name -Value $Tweak.Value -Type $Tweak.Type
 }
 
-# Sound Schemes (Bulk)
+# System-Wide Process Mitigations (Exploit Guard)
+Status "disabling system-wide exploit guard mitigations (low-latency)..." "step"
+try {
+    $MitigationValues = (Get-Command -Name 'Set-ProcessMitigation').Parameters['Disable'].Attributes.ValidValues
+    foreach ($V in $MitigationValues) {
+        Set-ProcessMitigation -SYSTEM -Disable $V.ToString() -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null
+    }
+} catch { Status "failed to access process mitigation module." "warn" }
+
+# IFEO & Kernel Mitigation Payload
+Status "injecting exploit guard bypass payload (binary 0x22) to core processes..." "step"
+$KernelPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel"
+$Length = 38
+try {
+    $AuditVal = Get-ItemProperty -Path $KernelPath -Name "MitigationAuditOptions" -ErrorAction SilentlyContinue
+    if ($AuditVal.MitigationAuditOptions -and $AuditVal.MitigationAuditOptions.Length -gt 0) { $Length = $AuditVal.MitigationAuditOptions.Length }
+} catch { }
+
+# Building the payload
+[byte[]]$Payload = New-Object byte[] $Length
+for ($i = 0; $i -lt $Length; $i++) { $Payload[$i] = 34 }
+
+$TargetProcs = @(
+    "fontdrvhost.exe", "dwm.exe", "lsass.exe", "svchost.exe", "WmiPrvSE.exe",
+    "winlogon.exe", "csrss.exe", "audiodg.exe", "ntoskrnl.exe", "services.exe",
+    "explorer.exe", "taskhostw.exe", "sihost.exe"
+)
+
+foreach ($Proc in $TargetProcs) {
+    $PPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$Proc"
+    Set-Registry -Path $PPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
+    Set-Registry -Path $PPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+}
+
+# Kernel Level Optimization
+Set-Registry -Path $KernelPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
+Set-Registry -Path $KernelPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+
+# Intel TSX (Transactional Synchronization Extensions)
+Status "optimizing intel tsx (transactional synchronization)..." "step"
+try {
+    $CPU = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue
+    if ($CPU.Manufacturer -eq 'GenuineIntel') {
+        Set-Registry -Path $KernelPath -Name "DisableTSX" -Value 0 -Type "DWord"
+    } else {
+        if (Get-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue 
+        }
+    }
+} catch { Status "failed to configure tsx parameters." "warn" }
+
+# --- SYSTEM SERVICES: DEBLOAT & CONFIGURATION ---
+
+# SvcHost Split Optimization (Process Isolation)
+Status "optimizing svchost split threshold (maximum isolation)..." "step"
+Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "SvcHostSplitThresholdInKB" -Value 0xffffffff -Type "DWord"
+
+Status "enforcing service grouping for all svchost instances (including xbox)..." "step"
+$Services = Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" -ErrorAction SilentlyContinue
+foreach ($S in $Services) {
+    try {
+        $ImagePath = (Get-ItemProperty -Path $S.PSPath -Name "ImagePath" -ErrorAction SilentlyContinue).ImagePath
+        if ($ImagePath -match "svchost\.exe") {
+            Set-Registry -Path $S.PSPath -Name "SvcHostSplitDisable" -Value 1 -Type "DWord"
+        }
+    } catch { }
+}
+
+# Master Service Debloat List
+Status "configuring system service startup types (master debloat)..." "step"
+$ServiceTweaks = @(
+    @{ Name = "dam"; Start = 4 },
+    @{ Name = "GpuEnergyDrv"; Start = 4 },
+    @{ Name = "NetBT"; Start = 4 },
+    @{ Name = "Telemetry"; Start = 4 },
+    @{ Name = "diagnosticshub.standardcollector.service"; Start = 4 },
+    @{ Name = "WerSvc"; Start = 4 },
+    @{ Name = "DiagTrack"; Start = 4 },
+    @{ Name = "wisvc"; Start = 4 },
+    @{ Name = "PcaSvc"; Start = 4 },
+    @{ Name = "DPS"; Start = 4 },
+    @{ Name = "WdiServiceHost"; Start = 4 },
+    @{ Name = "WdiSystemHost"; Start = 4 },
+    @{ Name = "tcpipreg"; Start = 4 },
+    @{ Name = "edgeupdate"; Start = 3 },
+    @{ Name = "Wecsvc"; Start = 4 },
+    @{ Name = "UCPD"; Start = 4 },
+    @{ Name = "condrv"; Start = 2 }
+)
+
+foreach ($T in $ServiceTweaks) {
+    if (Get-Service -Name $T.Name -ErrorAction SilentlyContinue) {
+        $SType = switch($T.Start) { 2 { "Automatic" } 3 { "Manual" } 4 { "Disabled" } }
+        Set-Service -Name $T.Name -StartupType $SType -ErrorAction SilentlyContinue
+    }
+}
+
+# UCPD Velocity Task
+Disable-ScheduledTask -TaskPath '\Microsoft\Windows\AppxDeploymentClient' -TaskName 'UCPD velocity' -ErrorAction SilentlyContinue | Out-Null
+
+
+# sound schemes
 $SoundKeys = @(
     ".Default\.Default", "CriticalBatteryAlarm", "DeviceConnect", "DeviceDisconnect", "DeviceFail", "FaxBeep", 
     "LowBatteryAlarm", "MailBeep", "MessageNudge", "Notification.Default", "Notification.IM", "Notification.Mail", 
@@ -679,7 +778,7 @@ foreach ($s in $SpeechKeys) {
     Set-Registry -Path "HKCU:\AppEvents\Schemes\Apps\sapisvr\$s\.current" -Name "" -Value "" -Type "String"
 }
 
-# Mouse Cursors (Bulk None)
+# Mouse Cursors
 $CursorKeys = @(
     "AppStarting", "Arrow", "Crosshair", "Hand", "Help", "IBeam", "No", "NWPen", 
     "SizeAll", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "Wait"
@@ -808,77 +907,28 @@ if (Test-Path $SettingsDat) {
 
         [gc]::Collect()
         Start-Sleep -Seconds 2
-        reg unload "HKLM\Settings" 2>$null
+        reg unload "HKLM\Settings" >nul 2>&1
     }
 }
 
-# Hardware: Network Adapter Power & Wake Optimization
-Status "optimizing network adapter power & wake features..." "step"
-$NICPath = "HKLM:\System\ControlSet001\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}"
-Get-ChildItem -Path $NICPath -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
-    $RegPath = $_.Name.Replace("HKEY_LOCAL_MACHINE", "HKLM")
-    $FullRegPath = $_.Name # For native reg command
-    
-    # Power Settings
-    reg add "$FullRegPath" /v "PnPCapabilities" /t REG_DWORD /d "24" /f | Out-Null
-    reg add "$FullRegPath" /v "AdvancedEEE" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "*EEE" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "EEELinkAdvertisement" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "SipsEnabled" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "ULPMode" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "GigaLite" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "EnableGreenEthernet" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "PowerSavingMode" /t REG_SZ /d "0" /f | Out-Null
-    
-    # Wake Settings
-    reg add "$FullRegPath" /v "S5WakeOnLan" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "*WakeOnMagicPacket" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "*ModernStandbyWoLMagicPacket" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "*WakeOnPattern" /t REG_SZ /d "0" /f | Out-Null
-    reg add "$FullRegPath" /v "WakeOnLink" /t REG_SZ /d "0" /f | Out-Null
-}
-
-# Hardware: Disable Selective Suspend & Wake for USB/PCI/HID/ACPI
-Status "disabling selective suspend & wake for all I/O devices..." "step"
-$DeviceHives = @("ACPI", "HID", "PCI", "USB")
-foreach ($Hive in $DeviceHives) {
-    # Parameters & Power
-    Get-ChildItem -Path "HKLM:\SYSTEM\ControlSet001\Enum\$Hive" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
-        $P = $_.Name
-        reg add "$P" /v "EnhancedPowerManagementEnabled" /t REG_DWORD /d "0" /f | Out-Null
-        reg add "$P" /v "SelectiveSuspendEnabled" /t REG_BINARY /d "00" /f | Out-Null
-        reg add "$P" /v "SelectiveSuspendOn" /t REG_DWORD /d "0" /f | Out-Null
-        reg add "$P" /v "WaitWakeEnabled" /t REG_DWORD /d "0" /f | Out-Null
-    }
-    # WDF Idle
-    Get-ChildItem -Path "HKLM:\SYSTEM\ControlSet001\Enum\$Hive" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "WDF" } | ForEach-Object {
-        reg add "$($_.Name)" /v "IdleInWorkingState" /t REG_DWORD /d "0" /f | Out-Null
-    }
-}
 
 # --- SYSTEM PERFORMANCE: POWER & HARDWARE ---
 Status "deploying albus ultimate power policy..." "step"
 
-# MSI Mode for GPUs
-$GpuDevs = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue
-foreach ($G in $GpuDevs) {
-    if ($G.InstanceId) {
-        $RegMSI = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($G.InstanceId)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
-        Set-Registry -Path $RegMSI -Name "MSISupported" -Value 1
-    }
-}
-
 # Ultimate Power Plan
 $UltimateGUID = "99999999-9999-9999-9999-999999999999"
-cmd /c "powercfg /duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 $UltimateGUID >nul 2>&1"
-cmd /c "powercfg /SETACTIVE $UltimateGUID >nul 2>&1"
+powercfg /duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 $UltimateGUID >$null 2>&1
+powercfg /changename $UltimateGUID "Albus Power Scheme" >$null 2>&1
+powercfg /setactive $UltimateGUID >$null 2>&1
 # Purge other plans
 $AllPlans = (powercfg /L) | Where-Object { $_ -match ':' } | ForEach-Object {
     if ($_ -match 'GUID:\s+([a-fA-F0-9-]+)') { $Matches[1] }
 }
 foreach ($P in $AllPlans) {
-    if ($P -ne $UltimateGUID) { cmd /c "powercfg /delete $P 2>nul" | Out-Null }
+    if ($P -ne $UltimateGUID) { powercfg /delete $P >$null 2>&1 }
 }
+
+
 
 # Global Power Tweaks
 powercfg /hibernate off
@@ -922,10 +972,11 @@ $PowerSettings = @(
 foreach ($S in $PowerSettings) {
     if ($S -match '^#') { continue }
     $P = $S -split ' '
-    powercfg /setacvalueindex $UltimateGUID $P[0] $P[1] $P[2] | Out-Null
-    powercfg /setdcvalueindex $UltimateGUID $P[0] $P[1] $P[2] | Out-Null
+    powercfg /setacvalueindex $UltimateGUID $P[0] $P[1] $P[2] >$null 2>&1
+    powercfg /setdcvalueindex $UltimateGUID $P[0] $P[1] $P[2] >$null 2>&1
 }
-powercfg /setactive $UltimateGUID | Out-Null
+powercfg /setactive $UltimateGUID >$null 2>&1
+
 
 
 # UI: Force Tray Icon Visibility
@@ -966,14 +1017,83 @@ try {
     }
 } catch { Status "failed to deploy albus services online." "warn" }
 
+# --- HARDWARE & INTERRUPT OPTIMIZATION ---
 
-# Storage: Optimize Write-Cache Buffer Flushing (SCSI & NVME)
-Status "optimizing storage write-cache buffer flushing..." "step"
-$StorageHives = @("SCSI", "NVME")
-foreach ($Hive in $StorageHives) {
-    Get-ChildItem -Path "HKLM:\SYSTEM\ControlSet001\Enum\$Hive" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
-        $DiskPath = "$($_.Name)\Disk"
-        reg add "$DiskPath" /v "CacheIsPowerProtected" /t REG_DWORD /d "1" /f | Out-Null
+# Remove ghost Devices
+Status "removing ghost/hidden pnp devices (cleaning leftovers)..." "step"
+$Ghosts = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { 
+    $_.Present -eq $false -and 
+    $_.InstanceId -notmatch '^(ROOT|SWD|HTREE|DISPLAY|BTHENUM)\\' 
+}
+foreach ($G in $Ghosts) { pnputil /remove-device $G.InstanceId /quiet >$null 2>&1 }
+
+# Storage Write-Cache
+Status "optimizing internal storage write-cache performance..." "step"
+$Disks = Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceType -ne "USB" }
+foreach ($D in $Disks) {
+    if ($D.PNPDeviceID) {
+        $P = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($D.PNPDeviceID)\Device Parameters\Disk"
+        Set-Registry -Path $P -Name "UserWriteCacheSetting" -Value 1
+        Set-Registry -Path $P -Name "CacheIsPowerProtected" -Value 1
+    }
+}
+
+# Deep Device Power Management
+Status "disabling aggressive power saving for all hardware classes..." "step"
+$PnpDevices = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -or $_.Status -eq 'Unknown' }
+foreach ($D in $PnpDevices) {
+    $ID = $D.InstanceId
+    $Class = $D.Class
+    $P = "HKLM:\SYSTEM\CurrentControlSet\Enum\$ID\Device Parameters"
+
+    # General Performance (WDF & Suspend)
+    Set-Registry -Path "$P\WDF" -Name "IdleInWorkingState" -Value 0
+    Set-Registry -Path $P -Name "SelectiveSuspendEnabled" -Value 0
+    Set-Registry -Path $P -Name "SelectiveSuspendOn" -Value 0
+    Set-Registry -Path $P -Name "EnhancedPowerManagementEnabled" -Value 0
+    Set-Registry -Path $P -Name "WaitWakeEnabled" -Value 0
+    
+    # MSPower_DeviceEnable (WMI)
+    try {
+        $WmiPath = "*$($ID.Replace('\', '\\'))*"
+        $Power = Get-WmiObject -Class MSPower_DeviceEnable -Namespace root\wmi -ErrorAction SilentlyContinue | Where-Object { $_.InstanceName -like $WmiPath }
+        if ($Power) { $Power.Enable = $false; $Power.Put() | Out-Null }
+    } catch {}
+
+    # Network Adapter Specifics (EEE & PME)
+    if ($Class -eq "Net") {
+        # Fetching driver-specific class key if possible
+        $NetKey = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\$ID" -Name "Driver" -ErrorAction SilentlyContinue
+        if ($NetKey.Driver) {
+            $CP = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\$($NetKey.Driver)"
+            Set-Registry -Path $CP -Name "PnPCapabilities" -Value 24
+            $EEEStrings = @("AdvancedEEE", "*EEE", "EEELinkAdvertisement", "SipsEnabled", "ULPMode", "GigaLite", "EnableGreenEthernet", "PowerSavingMode", "S5WakeOnLan", "*WakeOnMagicPacket", "*ModernStandbyWoLMagicPacket", "*WakeOnPattern", "WakeOnLink")
+            foreach ($E in $EEEStrings) { Set-Registry -Path $CP -Name $E -Value "0" -Type "String" }
+        }
+    }
+}
+
+
+# Interrupt Management (System-wide MSI Mode)
+Status "optimizing interrupt management & msi mode (low-latency)..." "step"
+$PciDevices = Get-PnpDevice -InstanceId "PCI\*" -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -or $_.Status -eq 'Unknown' }
+foreach ($D in $PciDevices) {
+    if ($D.InstanceId) {
+        $P = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($D.InstanceId)\Device Parameters\Interrupt Management"
+        Set-Registry -Path "$P\MessageSignaledInterruptProperties" -Name "MSISupported" -Value 1
+        # Remove Affinity Priority
+        if (Test-Path "$P\Affinity Policy") { Remove-ItemProperty -Path "$P\Affinity Policy" -Name "DevicePriority" -ErrorAction SilentlyContinue }
+    }
+}
+
+# DMA Remapping (Kernel DMA Guard)
+Status "optimizing dma remapping & kernel guard policy..." "step"
+Set-Registry -Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\default\DmaGuard\DeviceEnumerationPolicy" -Name "value" -Value 2
+Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" -ErrorAction SilentlyContinue | ForEach-Object {
+    $CompPath = "$($_.Name.Replace('HKEY_LOCAL_MACHINE', 'HKLM'))\Parameters"
+    if (Test-Path $CompPath) {
+        $Val = Get-ItemProperty -Path $CompPath -Name "DmaRemappingCompatible" -ErrorAction SilentlyContinue
+        if ($null -ne $Val) { Set-Registry -Path $CompPath -Name "DmaRemappingCompatible" -Value 0 }
     }
 }
 
@@ -1147,11 +1267,16 @@ Get-Service | Where-Object { $_.Name -match 'Edge' } | ForEach-Object {
 # Windows 10: Legacy Edge Package (DISM)
 $LegacyEdge = (Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like "*Microsoft-Windows-Internet-Browser-Package*~~*" }).PSChildName
 if ($LegacyEdge) {
-    $LPath = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages\$LegacyEdge"
-    reg add "$LPath" /v Visibility /t REG_DWORD /d 1 /f | Out-Null
-    reg delete "$LPath\Owners" /va /f | Out-Null
+    $LPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages\$LegacyEdge"
+    Set-Registry -Path $LPath -Name "Visibility" -Value 1
+    
+    # Remove Owners
+    $OwnersPath = "$LPath\Owners"
+    if (Test-Path $OwnersPath) { Remove-Item -Path $OwnersPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
+    
     dism.exe /online /Remove-Package /PackageName:$LegacyEdge /quiet /norestart >$null 2>&1
 }
+
 
 # Revert Region
 if ($OldRegion) { Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -Value $OldRegion -Force }
@@ -1292,7 +1417,7 @@ function Show-GPU-Menu {
                 Status "opening default browser for driver download..." "info"
                 Start-Process "https://www.nvidia.com/en-us/drivers"
                 
-                Write-Host "`n[!] PLEASE DOWNLOAD THE DRIVER AND PRESS ANY KEY TO CONTINUE..." -ForegroundColor Yellow
+                Write-Host "`nplease download the driver and press any key to continue..." -ForegroundColor Yellow
                 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
                 
                 # Step 2: Select File
@@ -1306,7 +1431,7 @@ function Show-GPU-Menu {
                     
                     # Step 3: Extract & Debloat
                     Status "extracting and debloating driver (this may take a minute)..." "step"
-                    $ExtractPath = "$env:SystemRoot\Temp\nvidiadriver"
+                    $ExtractPath = "$env:SystemRoot\Temp\NVIDIA"
                     if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
                     
                     $ZipPath = "C:\Program Files\7-Zip\7z.exe"
@@ -1570,7 +1695,9 @@ function Show-GPU-Menu {
     }
 }
 
-Status "Albus optimization engine has finished all tasks." "done"
+# Final cleanup
+Status "albus optimization engine has finished all tasks." "done"
 pause
+
 
 # =============================================================================================================================================================================
