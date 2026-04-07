@@ -6,8 +6,8 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Privilege = $Identity.Split('\')[-1]
+[Console]::Title = "Albus Playbook - $Privilege"
 
-[Console]::Title = "Albus test - ($Privilege)"
 
 $ErrorActionPreference     = "SilentlyContinue"
 [Console]::OutputEncoding   = [System.Text.Encoding]::UTF8
