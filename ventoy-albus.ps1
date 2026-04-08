@@ -68,7 +68,7 @@ $ArgList = "VTOYCLI /I /Drive:${DriveLetter}"
 $Process = Start-Process -FilePath $V2D.FullName -ArgumentList $ArgList -NoNewWindow -Wait -PassThru
 
 status "waiting for ventoy volume to initialize..." "info"
-Start-Sleep -Seconds 6
+Start-Sleep -Seconds 12
 
 $VentoyVol = Get-Volume | Where-Object { $_.FileSystemLabel -match "Ventoy" } | Select-Object -First 1
 if (-not $VentoyVol) {
@@ -228,6 +228,12 @@ if ($VentoyVol) {
 } else {
     status "config was placed in $BuildDir. move folders to your ventoy root." "info"
 }
+
+Write-Host ""
+status "cleaning up temporary files..." "info"
+if (Test-Path $Zip) { Remove-Item -Path $Zip -Force -ErrorAction SilentlyContinue }
+if (Test-Path $Extract) { Remove-Item -Path $Extract -Recurse -Force -ErrorAction SilentlyContinue }
+if ($VentoyVol -and (Test-Path "$PSScriptRoot\Ventoy-Albus-USB")) { Remove-Item -Path "$PSScriptRoot\Ventoy-Albus-USB" -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
 status "exiting in 10 seconds..." "info"
