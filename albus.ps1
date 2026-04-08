@@ -77,7 +77,6 @@ function Set-Registry {
     }
 }
 
-<#
 $dest = "C:\Albus"
 if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest | Out-Null }
 
@@ -155,7 +154,7 @@ if (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction Silentl
 } else {
     Status "network interface unresponsive. bypassing payload retrieval." "fail"
 }
-#>
+
 # =============================================================================================================================================================================
 
 Status "executing registry optimization engine..." "step"
@@ -660,64 +659,40 @@ foreach ($Tweak in $Tweaks) {
     Set-Registry -Path $Tweak.Path -Name $Tweak.Name -Value $Tweak.Value -Type $Tweak.Type
 }
 
-# System-Wide Process Mitigations (Exploit Guard)
-Status "disabling system-wide exploit guard mitigations (low-latency)..." "step"
-try {
-    $MitigationValues = (Get-Command -Name 'Set-ProcessMitigation').Parameters['Disable'].Attributes.ValidValues
-    foreach ($V in $MitigationValues) {
-        Set-ProcessMitigation -SYSTEM -Disable $V.ToString() -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null
-    }
-} catch { Status "failed to access process mitigation module." "warn" }
-
-# IFEO & Kernel Mitigation Payload
-Status "injecting exploit guard bypass payload (binary 0x22) to core processes..." "step"
-$KernelPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel"
-$Length = 38
-try {
-    $AuditVal = Get-ItemProperty -Path $KernelPath -Name "MitigationAuditOptions" -ErrorAction SilentlyContinue
-    if ($AuditVal.MitigationAuditOptions -and $AuditVal.MitigationAuditOptions.Length -gt 0) { $Length = $AuditVal.MitigationAuditOptions.Length }
-} catch { }
-
-# Building the payload
-[byte[]]$Payload = New-Object byte[] $Length
-for ($i = 0; $i -lt $Length; $i++) { $Payload[$i] = 34 }
-
-$TargetProcs = @(
-    "fontdrvhost.exe", "dwm.exe", "lsass.exe", "svchost.exe", "WmiPrvSE.exe",
-    "winlogon.exe", "csrss.exe", "audiodg.exe", "ntoskrnl.exe", "services.exe",
-    "explorer.exe", "taskhostw.exe", "sihost.exe"
+# sound schemes
+$SoundKeys = @(
+    ".Default\.Default", "CriticalBatteryAlarm", "DeviceConnect", "DeviceDisconnect", "DeviceFail", "FaxBeep", 
+    "LowBatteryAlarm", "MailBeep", "MessageNudge", "Notification.Default", "Notification.IM", "Notification.Mail", 
+    "Notification.Proximity", "Notification.Reminder", "Notification.SMS", "ProximityConnection", "SystemAsterisk", 
+    "SystemExclamation", "SystemHand", "SystemNotification", "WindowsUAC"
 )
-
-foreach ($Proc in $TargetProcs) {
-    $PPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$Proc"
-    Set-Registry -Path $PPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
-    Set-Registry -Path $PPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+foreach ($s in $SoundKeys) {
+    $p = if ($s -eq ".Default\.Default") { "HKCU:\AppEvents\Schemes\Apps\.Default\.Default\.Current" } else { "HKCU:\AppEvents\Schemes\Apps\.Default\$s\.Current" }
+    Set-Registry -Path $p -Name "" -Value "" -Type "String"
 }
 
-# Kernel Level Optimization
-Set-Registry -Path $KernelPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
-Set-Registry -Path $KernelPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+# speech sound schemes
+$SpeechKeys = @("DisNumbersSound", "HubOffSound", "HubOnSound", "HubSleepSound", "MisrecoSound", "PanelSound")
+foreach ($s in $SpeechKeys) {
+    Set-Registry -Path "HKCU:\AppEvents\Schemes\Apps\sapisvr\$s\.current" -Name "" -Value "" -Type "String"
+}
 
-# Intel TSX (Transactional Synchronization Extensions)
-Status "optimizing intel tsx (transactional synchronization)..." "step"
-try {
-    $CPU = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue
-    if ($CPU.Manufacturer -eq 'GenuineIntel') {
-        Set-Registry -Path $KernelPath -Name "DisableTSX" -Value 0 -Type "DWord"
-    } else {
-        if (Get-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue) {
-            Remove-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue 
-        }
-    }
-} catch { Status "failed to configure tsx parameters." "warn" }
+# mouse cursors
+$CursorKeys = @(
+    "AppStarting", "Arrow", "Crosshair", "Hand", "Help", "IBeam", "No", "NWPen", 
+    "SizeAll", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "Wait"
+)
+foreach ($c in $CursorKeys) {
+    Set-Registry -Path "HKCU:\Control Panel\Cursors" -Name $c -Value "" -Type "ExpandString"
+}
 
-# --- SYSTEM SERVICES: DEBLOAT & CONFIGURATION ---
+Status "registry optimization complete." "done"
 
-# SvcHost Split Optimization (Process Isolation)
-Status "optimizing svchost split threshold (maximum isolation)..." "step"
+# services and drivers
+Status "optimizing svchost split threshold..." "step"
 Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "SvcHostSplitThresholdInKB" -Value 0xffffffff -Type "DWord"
 
-Status "enforcing service grouping for all svchost instances (including xbox)..." "step"
+Status "enforcing service grouping for all svchost instances..." "step"
 $Services = Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" -ErrorAction SilentlyContinue
 foreach ($S in $Services) {
     try {
@@ -728,8 +703,7 @@ foreach ($S in $Services) {
     } catch { }
 }
 
-# Master Service Debloat List
-Status "configuring system service startup types (master debloat)..." "step"
+Status "configuring system service startup types..." "step"
 $ServiceTweaks = @(
     @{ Name = "dam"; Start = 4 },
     @{ Name = "GpuEnergyDrv"; Start = 4 },
@@ -744,7 +718,7 @@ $ServiceTweaks = @(
     @{ Name = "WdiServiceHost"; Start = 4 },
     @{ Name = "WdiSystemHost"; Start = 4 },
     @{ Name = "tcpipreg"; Start = 4 },
-    @{ Name = "edgeupdate"; Start = 3 },
+    @{ Name = "edgeupdate"; Start = 4 },
     @{ Name = "Wecsvc"; Start = 4 },
     @{ Name = "UCPD"; Start = 4 },
     @{ Name = "condrv"; Start = 2 }
@@ -757,38 +731,8 @@ foreach ($T in $ServiceTweaks) {
     }
 }
 
-# UCPD Velocity Task
-Disable-ScheduledTask -TaskPath '\Microsoft\Windows\AppxDeploymentClient' -TaskName 'UCPD velocity' -ErrorAction SilentlyContinue | Out-Null
-
-
-# sound schemes
-$SoundKeys = @(
-    ".Default\.Default", "CriticalBatteryAlarm", "DeviceConnect", "DeviceDisconnect", "DeviceFail", "FaxBeep", 
-    "LowBatteryAlarm", "MailBeep", "MessageNudge", "Notification.Default", "Notification.IM", "Notification.Mail", 
-    "Notification.Proximity", "Notification.Reminder", "Notification.SMS", "ProximityConnection", "SystemAsterisk", 
-    "SystemExclamation", "SystemHand", "SystemNotification", "WindowsUAC"
-)
-foreach ($s in $SoundKeys) {
-    $p = if ($s -eq ".Default\.Default") { "HKCU:\AppEvents\Schemes\Apps\.Default\.Default\.Current" } else { "HKCU:\AppEvents\Schemes\Apps\.Default\$s\.Current" }
-    Set-Registry -Path $p -Name "" -Value "" -Type "String"
-}
-
-# Speech Sound Schemes
-$SpeechKeys = @("DisNumbersSound", "HubOffSound", "HubOnSound", "HubSleepSound", "MisrecoSound", "PanelSound")
-foreach ($s in $SpeechKeys) {
-    Set-Registry -Path "HKCU:\AppEvents\Schemes\Apps\sapisvr\$s\.current" -Name "" -Value "" -Type "String"
-}
-
-# Mouse Cursors
-$CursorKeys = @(
-    "AppStarting", "Arrow", "Crosshair", "Hand", "Help", "IBeam", "No", "NWPen", 
-    "SizeAll", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "Wait"
-)
-foreach ($c in $CursorKeys) {
-    Set-Registry -Path "HKCU:\Control Panel\Cursors" -Name $c -Value "" -Type "ExpandString"
-}
-
-Status "registry optimization complete." "done"
+# ucpd velocity task
+Disable-ScheduledTask -TaskPath '\Microsoft\Windows\AppxDeploymentClient' -TaskName 'UCPD Velocity' -ErrorAction SilentlyContinue | Out-Null
 
 # =============================================================================================================================================================================
 # --- POST-REGISTRY SYSTEM TWEAKS ---
@@ -796,7 +740,7 @@ Status "registry optimization complete." "done"
 
 Status "performing post-optimization system tweaks..." "step"
 
-# Privacy & Security: Clear Capability Access database (Resets app permissions to default/deny)
+# privacy & Security: Clear Capability Access database (Resets app permissions to default/deny)
 Status "resetting privacy & security app permissions database..." "step"
 Stop-Service -Name 'camsvc' -Force -ErrorAction SilentlyContinue
 $CapabilityPath = "$env:ProgramData\Microsoft\Windows\CapabilityAccessManager"
@@ -832,12 +776,12 @@ $TasksToDisable = @(
 )
 foreach ($Task in $TasksToDisable) {
     Disable-ScheduledTask -TaskPath "\" -TaskName ($Task -split "\\")[-1] -ErrorAction SilentlyContinue | Out-Null
-    # Fallback to schtasks if path is specific
+    # fallback to schtasks if path is specific
     schtasks /Change /TN "$Task" /Disable 2>$null | Out-Null
 }
 
-# Network: Optimize bindings (Disable IPv6, LLDP, QoS, etc.)
-Status "optimizing network adapter bindings (IPv4 Priority)..." "step"
+# network: optimize bindings (disable ipv6, lldp, qos, etc.)
+Status "optimizing network adapter bindings (ipv4 priority)..." "step"
 $AdaptersToDisable = @('ms_lldp', 'ms_lltdio', 'ms_implat', 'ms_rspndr', 'ms_tcpip6', 'ms_server', 'ms_msclient', 'ms_pacer')
 foreach ($Binding in $AdaptersToDisable) {
     Disable-NetAdapterBinding -Name "*" -ComponentID $Binding -ErrorAction SilentlyContinue
@@ -875,7 +819,7 @@ powercfg /setdcvalueindex scheme_current sub_none consolelock 0 2>$null
 powercfg /setacvalueindex scheme_current sub_none consolelock 0 2>$null
 powercfg /setactive scheme_current 2>$null
 
-# Notifications: Disable Priority Notifications (Dynamic GUID)
+# notifications: disable priority notifications
 Status "disabling priority-only notification prompts..." "step"
 $PriorityGUIDs = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current" -ErrorAction SilentlyContinue |
     Where-Object { $_.PSChildName -match '^\{[a-f0-9-]+\}\$' } | ForEach-Object { ($_.PSChildName -split '\$')[0] } | Select-Object -Unique
@@ -886,7 +830,7 @@ foreach ($guid in $PriorityGUIDs) {
     Set-Registry -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\$guid`$windows.data.donotdisturb.quiethoursprofile`$quiethoursprofilelist\windows.data.donotdisturb.quiethoursprofile`$microsoft.quiethoursprofile.priorityonly" -Name "Data" -Value $PriorityBlob -Type "Binary"
 }
 
-# App Actions: Disable Windows Client CBS & Store Integration (Hive Loading)
+# app actions: disable windows client cbs & store integration
 Status "optimizing windows client session apps & hive settings..." "step"
 $AppsToKill = "AppActions", "CrossDeviceResume", "DesktopStickerEditorWin32Exe", "DiscoveryHubApp", "FESearchHost", "SearchHost", "SoftLandingTask", "TextInputHost", "VisualAssistExe", "WebExperienceHostApp", "WindowsBackupClient", "WindowsMigration"
 $AppsToKill | ForEach-Object { Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue }
@@ -914,117 +858,93 @@ if (Test-Path $SettingsDat) {
 
 
 # --- SYSTEM PERFORMANCE: POWER & HARDWARE ---
-Status "deploying albus ultimate power policy..." "step"
+Status "deploying albus core power optimization engine..." "step"
 
-# Ultimate Power Plan
+$AlbusGUID = "a1b050f1-c0de-4a1b-9cac-f1ce7c7c7c7c"
+$AlbusName = "Albus Power Scheme"
+
+# 1. Base Strategy (Ultimate -> High -> Balanced)
 $BaseGUID = "e9a42b02-d5df-448d-aa00-03f14749eb61" # Ultimate
-if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" } # High Performance fallback
-if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "381b4222-f694-41f0-9685-ff5bb260df2e" } # Balanced fallback
+if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" } # High Performance
+if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "381b4222-f694-41f0-9685-ff5bb260df2e" } # Balanced
 
-# Duplicating and capturing new GUID
-$NewPlanRaw = powercfg /duplicatescheme $BaseGUID | Out-String
-if ($NewPlanRaw -match 'GUID:\s+([a-f0-9-]+)') {
-    $AlbusGUID = $Matches[1]
-    powercfg /changename $AlbusGUID "Albus Power Scheme" *>$null
-    powercfg /setactive $AlbusGUID *>$null
+# 2. Scheme Enforcement (Fixed GUID Registry Check)
+if (-not (powercfg /L | Select-String $AlbusGUID)) {
+    Status "initializing native albus power container..." "info"
+    powercfg /duplicatescheme $BaseGUID $AlbusGUID *>$null
 }
+powercfg /changename $AlbusGUID $AlbusName *>$null
+powercfg /setactive $AlbusGUID *>$null
 
-# Fetch CURRENT active GUID to avoid "cannot be deleted" error
-$ActiveRaw = powercfg /getactivescheme | Out-String
-[string]$CurrentActive = ""
-if ($ActiveRaw -match 'GUID:\s+([a-f0-9-]+)') { $CurrentActive = $Matches[1] }
-
-# Purge other plans (Safe loop)
-if ($AlbusGUID) {
-    $AllPowerPlans = (powercfg /L) | Where-Object { $_ -match ':' } | ForEach-Object {
-        if ($_ -match 'GUID:\s+([a-f0-9-]+)') { $Matches[1] }
-    }
-    foreach ($P in $AllPowerPlans) {
-        if ($P -ne $AlbusGUID -and $P -ne $CurrentActive) {
+# 3. Purge Other Plans (Safe Cleanup)
+$DefaultPlans = @("381b4222-f694-41f0-9685-ff5bb260df2e", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", "a1841308-3541-4fab-bc81-f71556f20b4a", "e9a42b02-d5df-448d-aa00-03f14749eb61")
+(powercfg /L) | ForEach-Object {
+    if ($_ -match 'GUID:\s+([a-f0-9-]+)') {
+        $P = $Matches[1]
+        if ($P -ne $AlbusGUID -and $DefaultPlans -notcontains $P) {
             powercfg /delete $P *>$null
         }
     }
 }
 
-
-# Global Power Tweaks
+# 4. Global Performance Flags
 powercfg /hibernate off
-Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Power" -Name "HibernateEnabled" -Value 0
-Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Power" -Name "HibernateEnabledDefault" -Value 0
-Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name "HiberbootEnabled" -Value 0
-Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" -Name "PowerThrottlingOff" -Value 1
-Set-Registry -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings" -Name "ShowLockOption" -Value 0
-Set-Registry -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings" -Name "ShowSleepOption" -Value 0
+$PowerRegs = @(
+    "HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabled|0",
+    "HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabledDefault|0",
+    "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power|HiberbootEnabled|0",
+    "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling|PowerThrottlingOff|1",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowLockOption|0",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowSleepOption|0"
+)
+foreach ($R in $PowerRegs) {
+    $parts = $R -split '\|'
+    Set-Registry -Path $parts[0] -Name $parts[1] -Value $parts[2]
+}
 
-# Monitor Data Store (Disable Auto Color)
+# 5. Monitor Data Store (Disable Auto Color)
 $MonStore = Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore" -Recurse -ErrorAction SilentlyContinue
 foreach ($M in $MonStore) { Set-Registry -Path $M.PSPath -Name "AutoColorManagementEnabled" -Value 0 }
 
-# Deep Policy Tuning (Ultimate Plan)
-Status "optimizing low-latency power settings..." "info"
-$PowerSettings = @(
-    # HDD, Wireless, PCI-E
-    "0012ee47-9041-4b5d-9b77-535fba8b1442 6738e2c4-e8a5-4a42-b16a-e040e769756e 0", # HDD Off
-    "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0", # Wireless Max
-    "501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0", # PCI-E Exp Off
-    # Sleep & Wake
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0", # Sleep Off
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0", # Hybrid Off
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 0", # Wake Timers Off
-    # Processor (Unpark Cores 100%)
-    "54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100", # Min Processor
-    "54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100", # Max Processor
-    "54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318583 100", # Core Park Min
-    "54533251-82be-4824-96c1-47b60b740d00 ea062031-0e34-4ff1-9b6d-eb1059334028 100", # Core Park Max
-    # Display & Graphics
-    "7516b95f-f776-4464-8c53-06167f40cc99 aded5e82-b909-4619-9949-f5d71dac0bcb 100", # Brightness
-    "7516b95f-f776-4464-8c53-06167f40cc99 fbd9aa66-9553-4097-ba44-ed6e9d65eab8 0",   # Adaptive Off
-    "44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2",   # Intel Graphics
-    "f693fb01-e858-4f00-b20f-f30e12ac06d6 191f65b5-d45c-4a4f-8aae-1ab8bfd980e6 1",   # ATI PowerPlay
-    "e276e160-7cb0-43c6-b20b-73f5dce39954 a1662ab2-9d34-4e53-ba8b-2639b9e20857 3",   # Switchable Graphics
-    # USB
-    "2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",   # USB Selective Suspend
-    "2a737441-1930-4402-8d77-b2bebba308a3 d4e98f31-5ffe-4ce1-be31-1b38b384c009 0"    # USB3 Link Power
+# 6. Native Low-Latency Policy Tuning (Unhiding & Setting)
+Status "enforcing ultra-low latency power attributes..." "info"
+$MasterPowerTweaks = @(
+    # [SUB_GUID] [SETTING_GUID] [VALUE]
+    "0012ee47-9041-4b5d-9b77-535fba8b1442 6738e2c4-e8a5-4a42-b16a-e040e769756e 0",   # Hard Disk Off (Never)
+    "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0",   # Wireless Adapter (Max Perf)
+    "501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0",   # PCI Express Link State (Off)
+    "238c9fa8-0aad-41ed-83f4-97be242c8f20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0",   # Sleep (Never)
+    "238c9fa8-0aad-41ed-83f4-97be242c8f20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0",   # Hybrid Sleep (Off)
+    "238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 0",   # Wake Timers (Disable)
+    "54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100", # Processor Min (100%)
+    "54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100", # Processor Max (100%)
+    "54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318583 100", # Core Park Min (100%)
+    "54533251-82be-4824-96c1-47b60b740d00 ea062031-0e34-4ff1-9b6d-eb1059334028 100", # Core Park Max (100%)
+    "54533251-82be-4824-96c1-47b60b740d00 893dee03-5242-4997-a44d-ef36649442f1 1",   # Processor Boost Mode (Aggressive)
+    "54533251-82be-4824-96c1-47b60b740d00 447235c7-4842-4595-ad2a-1c0e5510b159 0",   # Processor Idle Disable
+    "54533251-82be-4824-96c1-47b60b740d00 5d76a2ca-e8c1-4010-a44d-83840f5977d5 0",   # Core Park Min Cores
+    "54533251-82be-4824-96c1-47b60b740d00 06cadf0e-64ed-448a-8927-ce7bf90eb35d 0",   # Core Park Performance State
+    "7516b95f-f776-4464-8c53-06167f40cc99 aded5e82-b909-4619-9949-f5d71dac0bcb 100", # Brightness (100%)
+    "7516b95f-f776-4464-8c53-06167f40cc99 fbd9aa66-9553-4097-ba44-ed6e9d65eab8 0",   # Adaptive Brightness (Off)
+    "44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2",   # Intel Graphics (Max Perf)
+    "f693fb01-e858-4f00-b20f-f30e12ac06d6 191f65b5-d45c-4a4f-8aae-1ab8bfd980e6 1",   # ATI PowerPlay (Max Perf)
+    "e276e160-7cb0-43c6-b20b-73f5dce39954 a1662ab2-9d34-4e53-ba8b-2639b9e20857 3",   # Switchable Graphics (Max Perf)
+    "2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",   # USB Selective Suspend (Off)
+    "2a737441-1930-4402-8d77-b2bebba308a3 d4e98f31-5ffe-4ce1-be31-1b38b384c009 0"    # USB3 Link Power Mgmt (Off)
 )
-if ($AlbusGUID) {
-    # 1. Broad Power Settings
-    foreach ($S in $PowerSettings) {
-        if ($S -match '^#') { continue }
-        $P = $S -split ' '
-        powercfg /setacvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-        powercfg /setdcvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-    }
 
-    # 2. Advanced Hardware Performance Tweaks
-    $PowerTweaks = @(
-        "SUB_PROCESSOR 5d76a2ca-e8c1-4010-a44d-83840f5977d5 0", # Processor Performance Core Parking Min Cores
-        "SUB_PROCESSOR bc5038f7-23e0-4960-96da-33abaf5935ec 100", # Processor Performance Core Parking Max Cores
-        "SUB_PROCESSOR 06cadf0e-64ed-448a-8927-ce7bf90eb35d 0", # Processor Performance Core Parking Parking Performance State
-        "SUB_PROCESSOR 447235c7-4842-4595-ad2a-1c0e5510b159 0", # Processor Idle Disable
-        "SUB_PROCESSOR 893dee03-5242-4997-a44d-ef36649442f1 1", # Processor Performance Boost Mode (Aggressive)
-        "SUB_PCI ee12f906-d277-404b-b6da-e5fa1a576df5 0", # PCI Express Link State Power Management
-        "SUB_VIDEO aded5e09-b913-44d3-bc3f-7c55c0454442 0", # Monitor Timeout AC
-        "SUB_SLEEP 29f79bd2-1200-4fa4-8419-1b55a1239122 0"  # Allow Hybrid Sleep
-    )
-    foreach ($T in $PowerTweaks) {
-        $P = $T -split ' '
-        powercfg /setacvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-        powercfg /setdcvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-    }
-    
-    # Finalize Activation
-    powercfg /setactive $AlbusGUID *>$null
+foreach ($T in $MasterPowerTweaks) {
+    if ($T -match '^#') { continue }
+    $P = $T -split ' '
+    # Unhide attribute first to ensure setting success
+    powercfg /attributes $P[0] $P[1] ATTRIB_HIDE -*>$null
+    # Apply AC and DC values to fixed GUID
+    powercfg /setacvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
+    powercfg /setdcvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
 }
 
-
-
-
-# UI: Force Tray Icon Visibility
-Status "enforcing unified taskbar icon visibility (all show)..." "step"
-$NotifySettings = Get-ChildItem -Path 'HKCU:\Control Panel\NotifyIconSettings' -Recurse -ErrorAction SilentlyContinue
-foreach ($S in $NotifySettings) {
-    Set-ItemProperty -Path $S.PSPath -Name 'IsPromoted' -Value 1 -Force -ErrorAction SilentlyContinue | Out-Null
-}
+# Finalize Active State
+powercfg /setactive $AlbusGUID *>$null
 
 # # --- ALBUS SERVICES: TIMER RESOLUTION & AUDIO ---
 Status "deploying albus core optimization engine..." "step"
@@ -1079,14 +999,62 @@ try {
     }
 } catch { Status "failed to deploy albus core services from github." "warn" }
 
-# Native Driver Tweaks for Timers
 Status "enforcing global kernel timer resolution requests..." "step"
 $RegKernel = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel"
 Set-Registry -Path $RegKernel -Name "GlobalTimerResolutionRequests" -Value 1 -Type "DWord"
 
-# --- HARDWARE & INTERRUPT OPTIMIZATION ---
+# system-wide process mitigations (exploit guard)
+Status "disabling system-wide exploit guard mitigations..." "step"
+try {
+    $MitigationValues = (Get-Command -Name 'Set-ProcessMitigation').Parameters['Disable'].Attributes.ValidValues
+    foreach ($V in $MitigationValues) {
+        Set-ProcessMitigation -SYSTEM -Disable $V.ToString() -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null
+    }
+} catch { Status "failed to access process mitigation module." "warn" }
 
-# Remove ghost Devices
+# ifeo & kernel mitigation payload
+Status "injecting exploit guard bypass payload (binary 0x22) to core processes..." "step"
+$KernelPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel"
+$Length = 38
+try {
+    $AuditVal = Get-ItemProperty -Path $KernelPath -Name "MitigationAuditOptions" -ErrorAction SilentlyContinue
+    if ($AuditVal.MitigationAuditOptions -and $AuditVal.MitigationAuditOptions.Length -gt 0) { $Length = $AuditVal.MitigationAuditOptions.Length }
+} catch { }
+
+# building the payload
+[byte[]]$Payload = New-Object byte[] $Length
+for ($i = 0; $i -lt $Length; $i++) { $Payload[$i] = 34 }
+
+$TargetProcs = @(
+    "fontdrvhost.exe", "dwm.exe", "lsass.exe", "svchost.exe", "WmiPrvSE.exe",
+    "winlogon.exe", "csrss.exe", "audiodg.exe", "ntoskrnl.exe", "services.exe",
+    "explorer.exe", "taskhostw.exe", "sihost.exe"
+)
+
+foreach ($Proc in $TargetProcs) {
+    $PPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$Proc"
+    Set-Registry -Path $PPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
+    Set-Registry -Path $PPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+}
+
+# kernel level optimization
+Set-Registry -Path $KernelPath -Name "MitigationOptions" -Value $Payload -Type "Binary"
+Set-Registry -Path $KernelPath -Name "MitigationAuditOptions" -Value $Payload -Type "Binary"
+
+# intel tsx (transactional synchronization extensions)
+Status "optimizing intel tsx (transactional synchronization)..." "step"
+try {
+    $CPU = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue
+    if ($CPU.Manufacturer -eq 'GenuineIntel') {
+        Set-Registry -Path $KernelPath -Name "DisableTSX" -Value 0 -Type "DWord"
+    } else {
+        if (Get-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $KernelPath -Name "DisableTSX" -ErrorAction SilentlyContinue 
+        }
+    }
+} catch { Status "failed to configure tsx parameters." "warn" }
+
+# remove ghost devices
 Status "removing ghost/hidden pnp devices (cleaning leftovers)..." "step"
 $Ghosts = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { 
     $_.Present -eq $false -and 
@@ -1094,7 +1062,7 @@ $Ghosts = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
 }
 foreach ($G in $Ghosts) { pnputil /remove-device $G.InstanceId /quiet >$null 2>&1 }
 
-# Storage Write-Cache
+# storage write-cache
 Status "optimizing internal storage write-cache performance..." "step"
 $Disks = Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceType -ne "USB" }
 foreach ($D in $Disks) {
@@ -1140,19 +1108,6 @@ foreach ($D in $PnpDevices) {
     }
 }
 
-
-# Interrupt Management (System-wide MSI Mode)
-Status "optimizing interrupt management & msi mode (low-latency)..." "step"
-$PciDevices = Get-PnpDevice -InstanceId "PCI\*" -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -or $_.Status -eq 'Unknown' }
-foreach ($D in $PciDevices) {
-    if ($D.InstanceId) {
-        $P = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($D.InstanceId)\Device Parameters\Interrupt Management"
-        Set-Registry -Path "$P\MessageSignaledInterruptProperties" -Name "MSISupported" -Value 1
-        # Remove Affinity Priority
-        if (Test-Path "$P\Affinity Policy") { Remove-ItemProperty -Path "$P\Affinity Policy" -Name "DevicePriority" -ErrorAction SilentlyContinue }
-    }
-}
-
 # DMA Remapping (Kernel DMA Guard)
 Status "optimizing dma remapping & kernel guard policy..." "step"
 Set-Registry -Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\default\DmaGuard\DeviceEnumerationPolicy" -Name "value" -Value 2
@@ -1164,13 +1119,8 @@ Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" -ErrorAction Silen
     }
 }
 
-# UI & Shell: Taskbar Unpin All
-Status "unpinning all taskbar items..." "step"
-Set-Registry -Path "-HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Name "" -Value ""
-Remove-Item -Recurse -Force "$env:USERPROFILE\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch" -ErrorAction SilentlyContinue | Out-Null
-
-# UI & Shell: Generate & Apply "Pro Black" Theme
-Status "applying pro black minimalist theme..." "step"
+# ui & shell optimization
+Status "applying pro black theme & unpinning taskbar..." "step"
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing -ErrorAction SilentlyContinue 
 $SW = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Width
 $SH = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Height
@@ -1183,84 +1133,67 @@ if (-not (Test-Path $BlackFile)) {
         $Gfx.Dispose(); $Bmp.Save($BlackFile); $Bmp.Dispose()
     } catch {}
 }
-# Apply Lock Screen & Wallpaper
+# apply theme & wallpaper
 Set-Registry -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" -Name "LockScreenImagePath" -Value $BlackFile -Type "String"
 Set-Registry -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" -Name "LockScreenImageStatus" -Value 1 -Type "DWord"
 Set-Registry -Path "HKCU:\Control Panel\Desktop" -Name "Wallpaper" -Value $BlackFile -Type "String"
 rundll32.exe user32.dll, UpdatePerUserSystemParameters
 
-# UI & Shell: Blackout User Account Pictures
-Status "blacking out system & user account pictures..." "step"
-$AccountPicPaths = @(
-    "$env:SystemDrive\ProgramData\Microsoft\User Account Pictures",
-    "$env:AppData\Microsoft\Windows\AccountPictures"
-)
+# force tray icon visibility
+$NotifySettings = Get-ChildItem -Path 'HKCU:\Control Panel\NotifyIconSettings' -Recurse -ErrorAction SilentlyContinue
+foreach ($S in $NotifySettings) {
+    Set-ItemProperty -Path $S.PSPath -Name 'IsPromoted' -Value 1 -Force -ErrorAction SilentlyContinue | Out-Null
+}
 
+# blackout account pictures
+$AccountPicPaths = @("$env:SystemDrive\ProgramData\Microsoft\User Account Pictures", "$env:AppData\Microsoft\Windows\AccountPictures")
 foreach ($PicPath in $AccountPicPaths) {
     if (Test-Path $PicPath) {
-        # Backup System Defaults
         $BackupPath = "$env:SystemDrive\ProgramData\User_Account_Pictures_Backup"
         if ($PicPath -match "ProgramData" -and !(Test-Path $BackupPath)) {
             Copy-Item $PicPath -Destination $BackupPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
         }
-
-        $Pics = Get-ChildItem $PicPath -Include *.png,*.bmp,*.jpg -Recurse -ErrorAction SilentlyContinue
-        foreach ($P in $Pics) {
+        Get-ChildItem $PicPath -Include *.png,*.bmp,*.jpg -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
             try {
-                $Img = [System.Drawing.Bitmap]::FromFile($P.FullName)
-                $W = $Img.Width; $H = $Img.Height
-                $Img.Dispose()
-                
+                $Img = [System.Drawing.Bitmap]::FromFile($_.FullName)
+                $W = $Img.Width; $H = $Img.Height; $Img.Dispose()
                 $NewImg = New-Object System.Drawing.Bitmap $W, $H
                 $Gfx = [System.Drawing.Graphics]::FromImage($NewImg)
                 $Gfx.Clear([System.Drawing.Color]::Black)
                 $Gfx.Dispose()
-                
-                # Determine native format for saving
-                $Ext = [System.IO.Path]::GetExtension($P.FullName).ToLower()
-                $Fmt = switch ($Ext) {
-                    ".png" { [System.Drawing.Imaging.ImageFormat]::Png }
-                    ".bmp" { [System.Drawing.Imaging.ImageFormat]::Bmp }
-                    Default { [System.Drawing.Imaging.ImageFormat]::Jpeg }
-                }
-                
-                $NewImg.Save($P.FullName, $Fmt)
-                $NewImg.Dispose()
+                $Ext = [System.IO.Path]::GetExtension($_.FullName).ToLower()
+                $Fmt = switch ($Ext) { ".png" { [System.Drawing.Imaging.ImageFormat]::Png }; ".bmp" { [System.Drawing.Imaging.ImageFormat]::Bmp }; Default { [System.Drawing.Imaging.ImageFormat]::Jpeg } }
+                $NewImg.Save($_.FullName, $Fmt); $NewImg.Dispose()
             } catch {}
         }
     }
 }
 
-# UI & Shell: Context Menu Debloat
-Status "cleaning up bloated context menu items (using engine)..." "step"
+# unpin taskbar items
+Set-Registry -Path "-HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" -Name "" -Value ""
+Remove-Item -Recurse -Force "$env:USERPROFILE\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch" -ErrorAction SilentlyContinue | Out-Null
+
+# context menu debloat
+Status "cleaning up bloated context menu items..." "step"
 $MenuTweaks = @(
-    # Core Cleanup
-    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"; Name = "NoCustomizeThisFolder"; Value = 1 }
-    @{ Path = "-HKCR:\Folder\shell\pintohome"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\*\shell\pintohomefile"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\exefile\shellex\ContextMenuHandlers\Compatibility"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\Folder\ShellEx\ContextMenuHandlers\Library Location"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\ModernSharing"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo"; Name = ""; Value = "" }
-    @{ Path = "-HKCR:\UserLibraryFolder\shellex\ContextMenuHandlers\SendTo"; Name = ""; Value = "" }
-    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"; Name = "NoPreviousVersionsPage"; Value = 1 }
-    
-    # Blocked Shell Extensions
-    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"; Name = "{9F156763-7844-4DC4-B2B1-901F640F5155}"; Value = ""; Type = "String" }
-    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"; Name = "{09A47860-11B0-4DA5-AFA5-26D86198A780}"; Value = ""; Type = "String" }
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"; Name = "NoCustomizeThisFolder"; Value = 1 },
+    @{ Path = "-HKCR:\Folder\shell\pintohome"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\*\shell\pintohomefile"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\exefile\shellex\ContextMenuHandlers\Compatibility"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\Folder\ShellEx\ContextMenuHandlers\Library Location"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\ModernSharing"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo"; Name = ""; Value = "" },
+    @{ Path = "-HKCR:\UserLibraryFolder\shellex\ContextMenuHandlers\SendTo"; Name = ""; Value = "" },
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"; Name = "NoPreviousVersionsPage"; Value = 1 },
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"; Name = "{9F156763-7844-4DC4-B2B1-901F640F5155}"; Value = ""; Type = "String" },
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"; Name = "{09A47860-11B0-4DA5-AFA5-26D86198A780}"; Value = ""; Type = "String" },
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"; Name = "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"; Value = ""; Type = "String" }
 )
-foreach ($M in $MenuTweaks) { 
-    $Type = if ($M.Type) { $M.Type } else { "DWord" }
-    Set-Registry -Path $M.Path -Name $M.Name -Value $M.Value -Type $Type 
-}
+foreach ($M in $MenuTweaks) { Set-Registry -Path $M.Path -Name $M.Name -Value $M.Value -Type $(if($M.Type){$M.Type}else{"DWord"}) }
 
-# UI & Shell: Start Menu Reset (Windows 10 & 11)
-Status "resetting start menu layout (unpin & clean)..." "step"
-
-# Windows 10 Logic: XML-based reset
+# start menu reset & organization
+Status "resetting start menu layout & shortcuts..." "step"
 if ([Environment]::OSVersion.Version.Major -eq 10 -and [Environment]::OSVersion.Version.Build -lt 22000) {
-    Status "applying windows 10 start layout reset..." "step"
     $LayoutXML = 'C:\Windows\StartMenuLayout.xml'
     $XMLContent = @"
 <LayoutModificationTemplate xmlns:defaultlayout="http://schemas.microsoft.com/Start/2014/FullDefaultLayout" xmlns:start="http://schemas.microsoft.com/Start/2014/StartLayout" Version="1" xmlns:taskbar="http://schemas.microsoft.com/Start/2014/TaskbarLayout" xmlns="http://schemas.microsoft.com/Start/2014/LayoutModification">
@@ -1269,76 +1202,96 @@ if ([Environment]::OSVersion.Version.Major -eq 10 -and [Environment]::OSVersion.
 </LayoutModificationTemplate>
 "@
     Set-Content -Path $LayoutXML -Value $XMLContent -Force -Encoding ASCII
-    
     foreach ($Hive in @("HKLM", "HKCU")) {
         $P = "${Hive}:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
         if (!(Test-Path $P)) { New-Item -Path $P -Force | Out-Null }
         Set-ItemProperty -Path $P -Name "LockedStartLayout" -Value 1 -Force
         Set-ItemProperty -Path $P -Name "StartLayoutFile" -Value $LayoutXML -Force
     }
-    
     Stop-Process -Force -Name explorer -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3
-    
-    foreach ($Hive in @("HKLM", "HKCU")) {
-        Set-ItemProperty -Path "${Hive}:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -Name "LockedStartLayout" -Value 0 -Force
-    }
+    foreach ($Hive in @("HKLM", "HKCU")) { Set-ItemProperty -Path "${Hive}:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -Name "LockedStartLayout" -Value 0 -Force }
     Remove-Item -Path $LayoutXML -Force -ErrorAction SilentlyContinue
 }
-
-# Windows 11 Logic: start2.bin reset (Embedded Clear Layout)
 if ([Environment]::OSVersion.Version.Major -eq 10 -and [Environment]::OSVersion.Version.Build -ge 22000) {
-    Status "applying windows 11 start layout reset (zero-pin template)..." "step"
     $Start2BinPath = "$env:USERPROFILE\AppData\Local\Packages\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\LocalState\start2.bin"
-    
-    # Embedded Base64 for a minimalist/empty pinned list
-    $EmptyStartB64 = "AgAAABAAAAD9////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
-    $StartBytes = [Convert]::FromBase64String($EmptyStartB64)
-    
-    # Wipe existing and write new empty layout
+    $StartBytes = [Convert]::FromBase64String("AgAAABAAAAD9////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")
     Remove-Item -Path $Start2BinPath -Force -ErrorAction SilentlyContinue | Out-Null
     [System.IO.File]::WriteAllBytes($Start2BinPath, $StartBytes)
-    
     Set-Registry -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Start" -Name "AllAppsViewMode" -Value 2 -Type "DWord"
     Stop-Process -Force -Name explorer -ErrorAction SilentlyContinue
 }
-
-# UI & Shell: Start Menu Organization & Shortcuts
-Status "organizing start menu & creating system shortcuts..." "step"
 # recycle bin shortcut
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Recycle Bin.lnk")
 $Shortcut.TargetPath = '::{645ff040-5081-101b-9f08-00aa002f954e}'
 $Shortcut.Save()
+# hide accessories folders
+@("$env:UserProfile\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Accessibility", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessibility", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessories") | ForEach-Object { if (Test-Path $_) { attrib +h "$_" /s /d >$null 2>&1 } }
 
-# hide accessibility/accessories folders
-$HideFolders = @(
-    "$env:USERPROFILE\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Accessibility",
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessibility",
-    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessories"
-)
-foreach ($F in $HideFolders) {
-    if (Test-Path $F) {
-        attrib +h "$F" /s /d >$null 2>&1
-    }
+Status "removing system bloat (uwp, capabilities, legacy features)..." "step"
+$UWPToKill = Get-AppxPackage -AllUsers | Where-Object {
+    $_.Name -notlike '*CBS*' -and
+    $_.Name -notlike '*Microsoft.AV1VideoExtension*' -and
+    $_.Name -notlike '*Microsoft.AVCEncoderVideoExtension*' -and
+    $_.Name -notlike '*Microsoft.HEIFImageExtension*' -and
+    $_.Name -notlike '*Microsoft.HEVCVideoExtension*' -and
+    $_.Name -notlike '*Microsoft.MPEG2VideoExtension*' -and
+    $_.Name -notlike '*Microsoft.Paint*' -and
+    $_.Name -notlike '*Microsoft.RawImageExtension*' -and
+    $_.Name -notlike '*Microsoft.SecHealthUI*' -and
+    $_.Name -notlike '*Microsoft.VP9VideoExtensions*' -and
+    $_.Name -notlike '*Microsoft.WebMediaExtensions*' -and
+    $_.Name -notlike '*Microsoft.WebpImageExtension*' -and
+    $_.Name -notlike '*Microsoft.Windows.Photos*' -and
+    $_.Name -notlike '*Microsoft.Windows.ShellExperienceHost*' -and
+    $_.Name -notlike '*Microsoft.Windows.StartMenuExperienceHost*' -and
+    $_.Name -notlike '*Microsoft.WindowsNotepad*' -and
+    $_.Name -notlike '*Microsoft.WindowsStore*' -and
+    $_.Name -notlike '*windows.immersivecontrolpanel*'
+}
+foreach ($App in $UWPToKill) {
+    try {
+        Remove-AppxPackage -Package $App.PackageFullName -AllUsers -ErrorAction Stop | Out-Null
+    } catch { }
 }
 
-# Application Debloat: Complete Microsoft Edge Removal
-Status "executing deep microsoft edge removal (force uninstall)..." "step"
+Get-WindowsCapability -Online | Where-Object {
+    $_.State -eq 'Installed' -and
+    $_.Name -notlike '*Ethernet*' -and
+    $_.Name -notlike '*MSPaint*' -and
+    $_.Name -notlike '*Notepad*' -and
+    $_.Name -notlike '*Wifi*' -and
+    $_.Name -notlike '*NetFX3*' -and
+    $_.Name -notlike '*VBSCRIPT*' -and
+    $_.Name -notlike '*WMIC*' -and
+    $_.Name -notlike '*ShellComponents*'
+} | ForEach-Object { try { Remove-WindowsCapability -Online -Name $_.Name -ErrorAction SilentlyContinue | Out-Null } catch {} }
 
-# Region Spoof (US) to bypass restrictions
+Get-WindowsOptionalFeature -Online | Where-Object {
+    $_.State -eq 'Enabled' -and
+    $_.FeatureName -notlike '*DirectPlay*' -and
+    $_.FeatureName -notlike '*LegacyComponents*' -and
+    $_.FeatureName -notlike '*NetFx*' -and
+    $_.FeatureName -notlike '*SearchEngine-Client*' -and
+    $_.FeatureName -notlike '*Server-Shell*' -and
+    $_.FeatureName -notlike '*Windows-Defender*' -and
+    $_.FeatureName -notlike '*Drivers-General*' -and
+    $_.FeatureName -notlike '*Server-Gui-Mgmt*' -and
+    $_.FeatureName -notlike '*WirelessNetworking*'
+} | ForEach-Object { try { Disable-WindowsOptionalFeature -Online -FeatureName $_.FeatureName -NoRestart -WarningAction SilentlyContinue | Out-Null } catch {} }
+
+Status "uninstalling edge, onedrive, health tools, legacy apps..." "step"
+# region spoof (us) to bypass restrictions
 $OldRegion = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -ErrorAction SilentlyContinue
 Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -Value 244 -Force -ErrorAction SilentlyContinue
-
-# Kill all Edge & related processes
+# kill all edge & related processes
 $EdgeProcs = "backgroundTaskHost", "Copilot", "CrossDeviceResume", "GameBar", "MicrosoftEdgeUpdate", "msedge", "msedgewebview2", "OneDrive", "OneDrive.Sync.Service", "OneDriveStandaloneUpdater", "Resume", "RuntimeBroker", "Search", "SearchHost", "Setup", "StoreDesktopExtension", "WidgetService", "Widgets"
 $EdgeProcs | ForEach-Object { Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue }
 Get-Process | Where-Object { $_.ProcessName -like "*edge*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-
-# Registry Clean: EdgeUpdate
+# registry clean: edgeupdate
 $EdgeRegHives = "HKCU:\SOFTWARE", "HKLM:\SOFTWARE", "HKCU:\SOFTWARE\Policies", "HKLM:\SOFTWARE\Policies", "HKCU:\SOFTWARE\WOW6432Node", "HKLM:\SOFTWARE\WOW6432Node", "HKCU:\SOFTWARE\WOW6432Node\Policies", "HKLM:\SOFTWARE\WOW6432Node\Policies"
 foreach ($H in $EdgeRegHives) { Remove-Item "$H\Microsoft\EdgeUpdate" -Recurse -Force -ErrorAction SilentlyContinue }
-
-# Uninstall Update Services
+# uninstall update services
 $EdgeUpdatePaths = @(); "LocalApplicationData", "ProgramFilesX86", "ProgramFiles" | ForEach-Object {
     $Root = [Environment]::GetFolderPath($_)
     $EdgeUpdatePaths += Get-ChildItem "$Root\Microsoft\EdgeUpdate\*.*.*.*\MicrosoftEdgeUpdate.exe" -Recurse -ErrorAction SilentlyContinue
@@ -1349,8 +1302,7 @@ foreach ($P in $EdgeUpdatePaths) {
         Start-Process -Wait $P -ArgumentList "/uninstall" -WindowStyle Hidden
     }
 }
-
-# Force Uninstall Edge via native registry string
+# force uninstall edge via native registry string
 try {
     $EdgeUninstallKey = Get-Item "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" -ErrorAction SilentlyContinue
     if ($EdgeUninstallKey) {
@@ -1358,83 +1310,31 @@ try {
         Start-Process cmd.exe -ArgumentList "/c $UString" -WindowStyle Hidden -Wait
     }
 } catch {}
-
-# Cleanup Edge leftovers
+# cleanup edge leftovers
 $EdgeLeftovers = @(
     "$env:SystemRoot\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
     "$env:ProgramFiles (x86)\Microsoft",
     "$env:SystemDrive\Windows\System32\config\systemprofile\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"
 )
 $EdgeLeftovers | ForEach-Object { if (Test-Path $_) { Remove-Item -Path $_ -Recurse -Force -ErrorAction SilentlyContinue } }
-
-# Delete Edge Services
+# delete edge services
 Get-Service | Where-Object { $_.Name -match 'Edge' } | ForEach-Object {
     sc.exe stop $_.Name >$null 2>&1
     sc.exe delete $_.Name >$null 2>&1
 }
-
-# Windows 10: Legacy Edge Package (DISM)
+# windows 10: legacy edge package (dism)
 $LegacyEdge = (Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like "*Microsoft-Windows-Internet-Browser-Package*~~*" }).PSChildName
 if ($LegacyEdge) {
     $LPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages\$LegacyEdge"
     Set-Registry -Path $LPath -Name "Visibility" -Value 1
-    
-    # Remove Owners
     $OwnersPath = "$LPath\Owners"
     if (Test-Path $OwnersPath) { Remove-Item -Path $OwnersPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
-    
     dism.exe /online /Remove-Package /PackageName:$LegacyEdge /quiet /norestart >$null 2>&1
 }
-
-
-# Revert Region
+# revert region
 if ($OldRegion) { Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -Value $OldRegion -Force }
 
-# System Debloat: UWP Applications (Filtered)
-Status "removing bloated UWP applications (preserving core)..." "step"
-$UWPToKill = Get-AppxPackage -AllUsers | Where-Object {
-    $_.Name -notmatch 'CBS|AV1VideoExtension|AVCEncoderVideoExtension|HEIFImageExtension|HEVCVideoExtension|MPEG2VideoExtension|Paint|RawImageExtension|SecHealthUI|VP9VideoExtensions|WebMediaExtensions|WebpImageExtension|Photos|ShellExperienceHost|StartMenuExperienceHost|Notepad|WindowsStore|NVIDIAControlPanel|immersivecontrolpanel|FilePicker|Search|BioEnrollment|LockApp|AAD|Accounts'
-}
-foreach ($App in $UWPToKill) {
-    try {
-        Remove-AppxPackage -Package $App.PackageFullName -AllUsers -ErrorAction Stop | Out-Null
-    } catch { }
-}
-
-# System Debloat: Windows Capabilities (Filtered)
-Status "removing unnecessary windows capabilities..." "step"
-Get-WindowsCapability -Online | Where-Object {
-    $_.State -eq 'Installed' -and
-    $_.Name -notmatch 'Ethernet|MSPaint|Notepad|Wifi|NetFX3|VBSCRIPT|WMIC|ShellComponents'
-} | ForEach-Object { try { Remove-WindowsCapability -Online -Name $_.Name -ErrorAction SilentlyContinue | Out-Null } catch {} }
-
-# System Debloat: Optional Features (Filtered)
-Status "disabling bloated legacy optional features..." "step"
-Get-WindowsOptionalFeature -Online | Where-Object {
-    $_.State -eq 'Enabled' -and
-    $_.FeatureName -notmatch 'DirectPlay|LegacyComponents|NetFx|SearchEngine-Client|Server-Shell|Windows-Defender|Drivers-General|Server-Gui-Mgmt|WirelessNetworking'
-} | ForEach-Object { try { Disable-WindowsOptionalFeature -Online -FeatureName $_.FeatureName -NoRestart -WarningAction SilentlyContinue | Out-Null } catch {} }
-
-# Application Cleanup: Legacy Software & Tools
-Status "uninstalling legacy apps, onedrive & health tools..." "step"
-
-# brlapi (Braille)
-sc.exe stop "brlapi" >$null 2>&1; sc.exe delete "brlapi" >$null 2>&1
-$BrlPath = "$env:SystemRoot\brltty"
-if (Test-Path $BrlPath) {
-    takeown /f "$BrlPath" /r /d y >$null 2>&1
-    icacls "$BrlPath" /grant *S-1-5-32-544:F /t >$null 2>&1
-    Remove-Item $BrlPath -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-# Microsoft GameInput
-$GameInput = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -like "*Microsoft GameInput*" }
-if ($GameInput) {
-    $Guid = $GameInput.PSChildName
-    Start-Process "msiexec.exe" -ArgumentList "/x $Guid /qn /norestart" -Wait -NoNewWindow
-}
-
-# OneDrive
+# onedrive
 Stop-Process -Force -Name OneDrive -ErrorAction SilentlyContinue | Out-Null
 $OneDriveSetups = @(
     "$env:SystemRoot\System32\OneDriveSetup.exe",
@@ -1443,17 +1343,7 @@ $OneDriveSetups = @(
 foreach ($O in $OneDriveSetups) { if (Test-Path $O) { Start-Process -Wait $O -ArgumentList "/uninstall" -WindowStyle Hidden } }
 Get-ScheduledTask | Where-Object {$_.Taskname -match 'OneDrive'} | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 
-# Remote Desktop Connection (MSTSC)
-try { Start-Process "mstsc" -ArgumentList "/Uninstall" -ErrorAction SilentlyContinue } catch {}
-$MSTSCProc = Get-Process -Name mstsc -ErrorAction SilentlyContinue
-if ($MSTSCProc) { $MSTSCProc | Stop-Process -Force -ErrorAction SilentlyContinue }
-
-# Legacy Snipping Tool (Win10)
-try { Start-Process "C:\Windows\System32\SnippingTool.exe" -ArgumentList "/Uninstall" -ErrorAction SilentlyContinue } catch {}
-$SnipProc = Get-Process -Name SnippingTool -ErrorAction SilentlyContinue
-if ($SnipProc) { $SnipProc | Stop-Process -Force -ErrorAction SilentlyContinue }
-
-# Update Health Tools & UHSSVC
+# update health tools & uhssvc
 $UpdateTools = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -match "Update for x64-based Windows Systems|Microsoft Update Health Tools" }
 foreach ($T in $UpdateTools) {
     if ($T.PSChildName) { Start-Process "msiexec.exe" -ArgumentList "/x $($T.PSChildName) /qn /norestart" -Wait -NoNewWindow }
@@ -1461,8 +1351,34 @@ foreach ($T in $UpdateTools) {
 sc.exe delete "uhssvc" >$null 2>&1
 Unregister-ScheduledTask -TaskName PLUGScheduler -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 
-# System Debloat: Startup Apps & Registry Persistence
-Status "clearing all 3rd party startup applications..." "step"
+# brlapi (braille display service - accessibility feature)
+sc.exe stop "brlapi" >$null 2>&1; sc.exe delete "brlapi" >$null 2>&1
+$BrlPath = "$env:SystemRoot\brltty"
+if (Test-Path $BrlPath) {
+    takeown /f "$BrlPath" /r /d y >$null 2>&1
+    icacls "$BrlPath" /grant *S-1-5-32-544:F /t >$null 2>&1
+    Remove-Item $BrlPath -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# remote desktop connection (mstsc)
+try { Start-Process "mstsc" -ArgumentList "/Uninstall" -ErrorAction SilentlyContinue } catch {}
+$MSTSCProc = Get-Process -Name mstsc -ErrorAction SilentlyContinue
+if ($MSTSCProc) { $MSTSCProc | Stop-Process -Force -ErrorAction SilentlyContinue }
+
+# legacy snipping tool (w10)
+try { Start-Process "C:\Windows\System32\SnippingTool.exe" -ArgumentList "/Uninstall" -ErrorAction SilentlyContinue } catch {}
+$SnipProc = Get-Process -Name SnippingTool -ErrorAction SilentlyContinue
+if ($SnipProc) { $SnipProc | Stop-Process -Force -ErrorAction SilentlyContinue }
+
+# microsoft gameinput
+$GameInput = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -like "*Microsoft GameInput*" }
+if ($GameInput) {
+    $Guid = $GameInput.PSChildName
+    Start-Process "msiexec.exe" -ArgumentList "/x $Guid /qn /norestart" -Wait -NoNewWindow
+}
+
+# startup apps & registry persistence & 3rd party scheduled tasks 
+Status "clearing all 3rd party startup applications, registry persistence, and scheduled tasks..." "step"
 $RunKeys = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunNotification",
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce",
@@ -1478,23 +1394,16 @@ foreach ($Key in $RunKeys) {
         reg.exe delete "$RealPath" /f /va >$null 2>&1
     }
 }
-
-# Physical Startup Folders
 $StartupFolders = @("$env:AppData\Microsoft\Windows\Start Menu\Programs\Startup", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp")
 foreach ($F in $StartupFolders) {
     if (Test-Path $F) {
         Remove-Item -Path "$F\*" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
     }
 }
-
-# System Debloat: 3rd Party Scheduled Tasks
-Status "removing all non-microsoft scheduled tasks..." "step"
-# Registry Task Cache
 $TaskTree = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree"
 Get-ChildItem $TaskTree -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -ne "Microsoft" } | ForEach-Object {
     Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
 }
-# File System Tasks
 $TaskFiles = "$env:SystemRoot\System32\Tasks"
 Get-ChildItem $TaskFiles -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne "Microsoft" } | ForEach-Object {
     Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
@@ -1516,7 +1425,7 @@ function Show-GPU-Menu {
 
 :GPULoop while ($true) {
     Show-GPU-Menu
-    $Choice = Read-Host " enter choice [1-3]"
+    $Choice = Read-Host " enter choice [1-3]"4
     if ($Choice -match '^[1-3]$') {
         switch ($Choice) {
             1 {
@@ -1533,7 +1442,7 @@ function Show-GPU-Menu {
                 Status "waiting for file selection..." "step"
                 Add-Type -AssemblyName System.Windows.Forms
                 $Dialog = New-Object System.Windows.Forms.OpenFileDialog
-                $Dialog.Title = "Select the downloaded NVIDIA Driver Installer"
+                $Dialog.Title = "select the downloaded nvidia driver installer"
                 $Dialog.Filter = "NVIDIA Installer (*.exe)|*.exe|All Files (*.*)|*.*"
                 if ($Dialog.ShowDialog() -eq "OK") {
                     $InstallFile = $Dialog.FileName
@@ -1547,11 +1456,11 @@ function Show-GPU-Menu {
                     if (Test-Path $ZipPath) {
                         & $ZipPath x "$InstallFile" -o"$ExtractPath" -y | Out-Null
                     } else {
-                        Status "7-Zip not found! Debloat aborted." "fail"
+                        Status "7-zip not found! debloat aborted." "fail"
                         pause; break
                     }
 
-                    # Aggressive Strip-down (Whitelist Approach)
+                    # aggressive strip-down (whitelist approach)
                     Status "executing aggressive strip-down (keeping core only)..." "step"
                     $Whitelist = @("Display.Driver", "NVI2", "EULA.txt", "ListDevices.txt", "setup.cfg", "setup.exe")
                     Get-ChildItem -Path $ExtractPath | ForEach-Object {
@@ -1560,7 +1469,7 @@ function Show-GPU-Menu {
                         }
                     }
 
-                    # Step 4: Patch setup.cfg (Remove Consent/Eula lines)
+                    # step 4: patch setup.cfg (remove consent/eula lines)
                     Status "patching setup.cfg for silent install..." "info"
                     $CfgPath = Join-Path $ExtractPath "setup.cfg"
                     if (Test-Path $CfgPath) {
@@ -1569,17 +1478,17 @@ function Show-GPU-Menu {
                         } | Set-Content $CfgPath -Force
                     }
 
-                    # Step 5: Silent Install
+                    # step 5: silent install
                     Status "executing clean driver installation..." "step"
                     $Setup = "$ExtractPath\setup.exe"
                     if (Test-Path $Setup) {
                         Start-Process $Setup -ArgumentList "-s -noreboot -noeula -clean" -Wait -NoNewWindow
                         Status "nvidia driver installation complete." "done"
                         
-                    # Step 6: Post-Installation Performance Tuning
+                    # step 6: post-installation performance tuning
                     Status "applying advanced nvidia performance tweaks..." "step"
                         
-                    # Class ID Based Tweaks (P-State, HDCP, Profiling)
+                    # class id based tweaks (p-state, hdcp, profiling)
                     $GPUClasses = Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}" -ErrorAction SilentlyContinue
                     foreach ($C in $GPUClasses) {
                         if ($C.PSChildName -match '^\d{4}$') {
@@ -1589,7 +1498,7 @@ function Show-GPU-Menu {
                         }
                     }
 
-                    # NVTweak / FTS / Tray
+                    # nvtweak / fts / tray
                     Set-Registry -Path "HKLM:\System\ControlSet001\Services\nvlddmkm\Parameters\Global\NVTweak" -Name "NvCplPhysxAuto" -Value 0
                     Set-Registry -Path "HKLM:\System\ControlSet001\Services\nvlddmkm\Parameters\Global\NVTweak" -Name "NvDevToolsVisible" -Value 1
                     Set-Registry -Path "HKLM:\System\ControlSet001\Services\nvlddmkm\Parameters\Global\NVTweak" -Name "RmProfilingAdminOnly" -Value 0
@@ -1597,11 +1506,11 @@ function Show-GPU-Menu {
                     Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\FTS" -Name "EnableGR535" -Value 0
                     Set-Registry -Path "HKLM:\SYSTEM\ControlSet001\Services\nvlddmkm\Parameters\FTS" -Name "EnableGR535" -Value 0
                         
-                    # Unblock DRS Files
+                    # unblock drs files
                     $DRSPath = "C:\ProgramData\NVIDIA Corporation\Drs"
                     if (Test-Path $DRSPath) { Get-ChildItem -Path $DRSPath -Recurse | Unblock-File -ErrorAction SilentlyContinue }
 
-                    # Step 7: NVIDIA Profile Inspector (Download & Apply)
+                    # step 7: nvidia profile inspector (download & apply)
                     Status "fetching latest nvidia profile inspector from github..." "step"
                     $InspectorZip = "$env:SystemRoot\Temp\nvidiaProfileInspector.zip"
                     $ExtractDir = "$env:SystemRoot\Temp\nvidiaProfileInspector"
@@ -1614,7 +1523,7 @@ function Show-GPU-Menu {
                             Status "downloading $($Asset.name)..." "info"
                             Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $InspectorZip -UseBasicParsing -ErrorAction Stop
                                 
-                            # Extract using 7z
+                            # extract using 7z
                             $ZipPath = "C:\Program Files\7-Zip\7z.exe"
                             if (Test-Path $ZipPath) {
                                 & $ZipPath x "$InspectorZip" -o"$ExtractDir" -y | Out-Null
@@ -1668,7 +1577,7 @@ function Show-GPU-Menu {
                         if ($InspectorExe) {
                             Start-Process $InspectorExe.FullName -ArgumentList "-silentImport $NIPPath" -Wait -NoNewWindow
                         }
-                        Status "NVIDIA performance profile applied." "done"
+                        Status "nvidia performance profile applied." "done"
                     } else {
                         Status "setup.exe not found in extracted files!" "fail"
                     }
@@ -1678,25 +1587,25 @@ function Show-GPU-Menu {
                 pause
             }
             2 {
-                Status "starting AMD GPU driver procedure..." "step"
+                Status "starting amd gpu driver procedure..." "step"
 
-                # Step 1: Download
-                Status "opening default browser for AMD support..." "info"
+                # step 1: download
+                Status "opening default browser for amd support..." "info"
                 Start-Process "https://www.amd.com/en/support/download/drivers.html"
-                Write-Host "`n[!] PLEASE DOWNLOAD THE ADRENALIN DRIVER AND PRESS ANY KEY TO CONTINUE..." -ForegroundColor Yellow
+                Write-Host "`nplease download the adrenalin driver and press any key to continue..." -ForegroundColor Yellow
                 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
-                # Step 2: Select File
+                # step 2: select file
                 Status "waiting for file selection..." "step"
                 Add-Type -AssemblyName System.Windows.Forms
                 $Dialog = New-Object System.Windows.Forms.OpenFileDialog
-                $Dialog.Title = "Select the downloaded AMD Driver Installer"
+                $Dialog.Title = "select the downloaded amd driver installer"
                 $Dialog.Filter = "AMD Installer (*.exe)|*.exe|All Files (*.*)|*.*"
                 if ($Dialog.ShowDialog() -eq "OK") {
                     $InstallFile = $Dialog.FileName
                     
-                    # Step 3: Extract & Surgery
-                    Status "extracting and patching AMD installer files..." "step"
+                    # step 3: extract & surgery
+                    Status "extracting and patching amd installer files..." "step"
                     $ExtractPath = "$env:SystemRoot\Temp\amddriver"
                     if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
                     
@@ -1704,10 +1613,10 @@ function Show-GPU-Menu {
                     if (Test-Path $ZipPath) {
                         & $ZipPath x "$InstallFile" -o"$ExtractPath" -y | Out-Null
                     } else {
-                        Status "7-Zip not found! Debloat aborted." "fail"; pause; break
+                        Status "7-Zip not found! debloat aborted." "fail"; pause; break
                     }
 
-                    # Patch XML Configs (Disable Telemetry/UEP)
+                    # patch xml configs (disable telemetry/uep)
                     $XMLDirs = @("Config\AMDAUEPInstaller.xml", "Config\AMDCOMPUTE.xml", "Config\AMDLinkDriverUpdate.xml", "Config\AMDRELAUNCHER.xml", "Config\AMDScoSupportTypeUpdate.xml", "Config\AMDUpdater.xml", "Config\AMDUWPLauncher.xml", "Config\EnableWindowsDriverSearch.xml", "Config\InstallUEP.xml", "Config\ModifyLinkUpdate.xml")
                     foreach ($X in $XMLDirs) {
                         $XP = Join-Path $ExtractPath $X
@@ -1718,7 +1627,7 @@ function Show-GPU-Menu {
                         }
                     }
 
-                    # Patch JSON Manifests (InstallByDefault: No)
+                    # patch json manifests (installbydefault: no)
                     $JSONDirs = @("Config\InstallManifest.json", "Bin64\cccmanifest_64.json")
                     foreach ($J in $JSONDirs) {
                         $JP = Join-Path $ExtractPath $J
@@ -1729,34 +1638,34 @@ function Show-GPU-Menu {
                         }
                     }
 
-                    # Step 4: Installation
-                    Status "executing AMD driver installation (GUI mode)..." "step"
+                    # step 4: installation
+                    Status "executing amd driver installation (gui mode)..." "step"
                     $Setup = "$ExtractPath\Bin64\ATISetup.exe"
                     if (Test-Path $Setup) {
                         Start-Process -Wait $Setup -ArgumentList "-INSTALL -VIEW:2" -WindowStyle Hidden
                     }
 
-                    # Step 5: Post-Install Cleanup
-                    Status "cleaning up AMD bloatware and services..." "step"
-                    # Run Keys & Tasks
+                    # step 5: post-install cleanup
+                    Status "cleaning up amd bloatware and services..." "step"
+                    # run keys & tasks
                     Set-Registry -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AMDNoiseSuppression" -Value "-"
                     Set-Registry -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "StartRSX" -Value "-"
                     Unregister-ScheduledTask -TaskName "StartCN" -Confirm:$false -ErrorAction SilentlyContinue
                     
-                    # Massive Service Wipe
+                    # massive service wipe
                     $AMDSvcs = "AMD Crash Defender Service", "amdfendr", "amdfendrmgr", "amdacpbus", "AMDSAFD", "AtiHDAudioService"
                     foreach ($S in $AMDSvcs) {
                         cmd /c "sc stop `"$S`" >nul 2>&1"
                         cmd /c "sc delete `"$S`" >nul 2>&1"
                     }
 
-                    # Bug Report & Uninstaller cleanup
+                    # bug report & uninstaller cleanup
                     Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\AMD Bug Report Tool" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
                     Remove-Item "$env:SystemDrive\Windows\SysWOW64\AMDBugReportTool.exe" -Force -ErrorAction SilentlyContinue | Out-Null
                     $AMDInstallMgr = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -match "AMD Install Manager" }
                     if ($AMDInstallMgr) { Start-Process "msiexec.exe" -ArgumentList "/x $($AMDInstallMgr.PSChildName) /qn /norestart" -Wait -NoNewWindow }
                     
-                    # Shortcut & File cleanup
+                    # shortcut & file cleanup
                     $RSPath = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\AMD Software$([char]0xA789) Adrenalin Edition"
                     if (Test-Path $RSPath) {
                         Move-Item -Path "$RSPath\*.lnk" -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue
@@ -1764,15 +1673,15 @@ function Show-GPU-Menu {
                     }
                     Remove-Item "$env:SystemDrive\AMD" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
 
-                    # Step 6: Settings & Profiles
+                    # step 6: settings & profiles
                     Status "applying optimized AMD performance profile..." "step"
-                    # Initializing Radeon Software
+                    # initializing radeon software
                     $RSP = "$env:SystemDrive\Program Files\AMD\CNext\CNext\RadeonSoftware.exe"
                     if (Test-Path $RSP) {
                         Start-Process $RSP; Start-Sleep -Seconds 15; Stop-Process -Name "RadeonSoftware" -Force -ErrorAction SilentlyContinue
                     }
                     
-                    # Global Settings (VSync Off, Texture Quality, etc)
+                    # global settings (vsync off, texture quality, etc)
                     Set-Registry -Path "HKCU:\Software\AMD\CN" -Name "AutoUpdate" -Value 0
                     Set-Registry -Path "HKCU:\Software\AMD\CN" -Name "WizardProfile" -Value "PROFILE_CUSTOM" -Type "String"
                     Set-Registry -Path "HKCU:\Software\AMD\CN\CustomResolutions" -Name "EulaAccepted" -Value "true" -Type "String"
@@ -1781,7 +1690,7 @@ function Show-GPU-Menu {
                     Set-Registry -Path "HKCU:\Software\AMD\CN" -Name "CN_Hide_Toast_Notification" -Value "true" -Type "String"
                     Set-Registry -Path "HKCU:\Software\AMD\CN" -Name "AnimationEffect" -Value "false" -Type "String"
                     
-                    # UMD & Power Settings (VSync, Texture Filter, Tessellation, Vari-Bright)
+                    # umd & power settings (vsync, texture filter, tessellation, vari-bright)
                     $GpuBase = "HKLM:\System\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}"
                     Get-ChildItem $GpuBase -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
                         if ($_.PSChildName -eq "UMD") {
@@ -1794,7 +1703,7 @@ function Show-GPU-Menu {
                             Set-Registry -Path $_.PSPath -Name "abmlevel" -Value ([byte[]](0x00,0x00,0x00,0x00)) -Type "Binary"
                         }
                     }
-                    Status "AMD driver installation and optimization complete." "done"
+                    Status "amd driver installation and optimization complete." "done"
                 } else { Status "selection cancelled." "warn" }
                 pause
             }
@@ -1804,9 +1713,20 @@ function Show-GPU-Menu {
     }
 }
 
-# Final cleanup
-Status "albus optimization engine has finished all tasks." "done"
-pause
+# interrupt management (system-wide msi mode)
+Status "optimizing interrupt management & msi mode..." "step"
+$PciDevices = Get-PnpDevice -InstanceId "PCI\*" -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' -or $_.Status -eq 'Unknown' }
+foreach ($D in $PciDevices) {
+    if ($D.InstanceId) {
+        $P = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($D.InstanceId)\Device Parameters\Interrupt Management"
+        Set-Registry -Path "$P\MessageSignaledInterruptProperties" -Name "MSISupported" -Value 1
+        # remove affinity priority
+        if (Test-Path "$P\Affinity Policy") { Remove-ItemProperty -Path "$P\Affinity Policy" -Name "DevicePriority" -ErrorAction SilentlyContinue }
+    }
+}
 
+# final cleanup
+Status "albus-playbook has finished all tasks." "done"
+pause
 
 # =============================================================================================================================================================================
