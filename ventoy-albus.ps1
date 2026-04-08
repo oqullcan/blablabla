@@ -1,63 +1,86 @@
 $ErrorActionPreference = 'Stop'
 Clear-Host
-Write-Host "====================================" -ForegroundColor Cyan
-Write-Host " ALBUS VENTOY USB AUTOMATIC BUILDER " -ForegroundColor Cyan
-Write-Host "====================================" -ForegroundColor Cyan
 
-# 1. USB Seçimi
+# albus status engine
+function status ($msg, $type = "info") {
+    $p, $c = switch ($type) {
+        "info"    { "info", "Cyan" }
+        "done"    { "done", "Green" }
+        "warn"    { "warn", "Red" }
+        "fail"    { "fail", "Red" }
+        "step"    { "step", "Magenta" }
+        "ask"     { "ask ", "Yellow" }
+        Default   { "albus", "Gray" }
+    }
+    Write-Host "$p - " -NoNewline -ForegroundColor $c
+    Write-Host $msg.ToLower()
+}
+
+$host.UI.RawUI.WindowTitle = "albus usb creator"
+status "initializing ventoy & albus usb automatic builder..." "step"
+
+# 1. usb selection
 $USBs = Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter -ne $null }
 if ($USBs.Count -eq 0) { 
-    Write-Host "CRITICAL: No USB drive detected. Please plug in a USB and try again." -ForegroundColor Red
+    status "no usb drive detected. please plug in a usb and try again." "fail"
     Pause; Exit
 }
 
-Write-Host "`n--- Available USB Drives ---" -ForegroundColor Yellow
-$USBs | Select-Object DriveLetter, FileSystemLabel, SizeRemaining, Size | Format-Table
-$ans = Read-Host "Enter the Drive Letter of the USB you want to FORMAT (e.g. E)"
+status "scanning for available usb drives..." "info"
+Write-Host ""
+$USBs | Select-Object @{N='letter';E={$_.DriveLetter}}, @{N='label';E={$_.FileSystemLabel}}, @{N='free(gb)';E={[math]::Round($_.SizeRemaining/1GB, 2)}}, @{N='total(gb)';E={[math]::Round($_.Size/1GB, 2)}} | Format-Table -AutoSize
+Write-Host ""
+
+Write-Host "ask  - " -NoNewline -ForegroundColor Yellow
+$ans = Read-Host "enter the drive letter of the usb you want to format (e.g. e)"
 $DriveLetter = $ans.Trim().Replace(":", "").ToUpper()
 
 if (-not ($USBs.DriveLetter -contains $DriveLetter)) {
-    Write-Host "Invalid Drive Letter selected. Exiting." -ForegroundColor Red
+    status "invalid drive letter selected. aborting." "fail"
     Pause; Exit
 }
 
-Write-Host "WARNING: ALL DATA ON DRIVE ${DriveLetter}:\ WILL BE ERASED!" -ForegroundColor Red
-$confirm = Read-Host "Are you sure? Type 'YES' to continue"
-if ($confirm -ne 'YES') { Exit }
+status "warning: all data on drive ${DriveLetter}:\ will be permanently erased." "warn"
+Write-Host "ask  - " -NoNewline -ForegroundColor Yellow
+$confirm = Read-Host "are you sure? type 'yes' to continue"
+if ($confirm.ToLower() -ne 'yes') { 
+    status "operation cancelled by user." "info"
+    Exit 
+}
 
-# 2. Ventoy İndirme
-Write-Host "`n[1/4] Fetching latest Ventoy release from GitHub..." -ForegroundColor Cyan
+# 2. download ventoy
+status "fetching latest ventoy release from github..." "step"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $Rel = Invoke-RestMethod "https://api.github.com/repos/ventoy/Ventoy/releases/latest" -UseBasicParsing
 $Asset = $Rel.assets | Where-Object Name -match "windows.zip$"
 $Zip = "$env:TEMP\ventoy.zip"
 $Extract = "$env:TEMP\ventoy_extract"
 
-Write-Host "[2/4] Downloading $($Asset.name)..." -ForegroundColor Cyan
+status "downloading $($Asset.name)..." "info"
 Invoke-WebRequest $Asset.browser_download_url -OutFile $Zip -UseBasicParsing
 if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
 Expand-Archive -Path $Zip -DestinationPath $Extract -Force
 $V2D = Get-ChildItem "$Extract\*\Ventoy2Disk.exe" | Select-Object -First 1
 
-# 3. Ventoy Kurulumu
-Write-Host "[3/4] Installing Ventoy to Drive ${DriveLetter}:\ (This may take a few moments)..." -ForegroundColor Cyan
+# 3. install ventoy
+status "installing ventoy to drive ${DriveLetter}:\ (this may take a few moments)..." "step"
 $ArgList = "VTOYCLI /I /Drive:${DriveLetter}"
 $Process = Start-Process -FilePath $V2D.FullName -ArgumentList $ArgList -NoNewWindow -Wait -PassThru
 
-Write-Host "Waiting for Ventoy volume to initialize..." -ForegroundColor Yellow
+status "waiting for ventoy volume to initialize..." "info"
 Start-Sleep -Seconds 6
 
 $VentoyVol = Get-Volume | Where-Object { $_.FileSystemLabel -match "Ventoy" } | Select-Object -First 1
 if (-not $VentoyVol) {
-    Write-Host "Ventoy installation volume not found! Creating config locally on Desktop as fallback." -ForegroundColor Red
-    $BuildDir = "$PSScriptRoot\Ventoy-Albus-USB"
+    status "ventoy installation volume not found. creating config locally as fallback." "fail"
+    $BuildDir = "$PSScriptRoot\ventoy-albus-usb"
 } else {
     $BuildDir = "$($VentoyVol.DriveLetter):\"
-    Write-Host "Ventoy successfully installed! Config will be applied to $($BuildDir)" -ForegroundColor Green
+    status "ventoy successfully installed. config will be applied to $($BuildDir)" "done"
 }
 
-# 4. Albus Config Yazılması
-Write-Host "[4/4] Writing Albus USB Config..." -ForegroundColor Cyan
+# 4. write albus config
+status "writing albus zero-touch xml configuration..." "step"
 
 if (-not (Test-Path $BuildDir)) { New-Item -Path $BuildDir -ItemType Directory -Force | Out-Null }
 New-Item -Path "$BuildDir\ventoy\albus" -ItemType Directory -Force | Out-Null
@@ -198,11 +221,10 @@ $AutoUnattendXml = @'
 '@
 $AutoUnattendXml | Set-Content -Path "$BuildDir\ventoy\albus\autounattend.xml" -Encoding UTF8
 
-Write-Host "`n========================================================" -ForegroundColor Green
-Write-Host " ALL DONE! VENTOY & ALBUS USB IS READY." -ForegroundColor Green
+status "operation completed successfully." "done"
+status "ventoy & albus usb is ready for deployment." "done"
 if ($VentoyVol) {
-    Write-Host " Just place your Windows .ISO files into $($BuildDir)ISOs" -ForegroundColor Cyan
+    status "please place your windows .iso files into $($BuildDir)isos" "info"
 } else {
-    Write-Host " Config was placed in $BuildDir. Move to your Ventoy USB!" -ForegroundColor Cyan
+    status "config was placed in $BuildDir. move folders to your ventoy root." "info"
 }
-Write-Host "========================================================" -ForegroundColor Green
