@@ -8,3 +8,5 @@ irm "https://raw.githubusercontent.com/oqullcan/blablabla/refs/heads/main/run.ps
 [Winsux | fr33thy](https://github.com/FR33THYFR33THY/WinSux)
 
 [PC-Tuning | valleyofdoom](https://github.com/valleyofdoom/PC-Tuning)
+
+[Revision | meetrevision](https://github.com/meetrevision)
