@@ -857,94 +857,61 @@ if (Test-Path $SettingsDat) {
 }
 
 
-# --- SYSTEM PERFORMANCE: POWER & HARDWARE ---
-Status "deploying albus core power optimization engine..." "step"
-
+# # power & performance
+Status "deploying albus core power policy..." "step"
 $AlbusGUID = "a1b050f1-c0de-4a1b-9cac-f1ce7c7c7c7c"
-$AlbusName = "Albus Power Scheme"
+$PList = & powercfg /l 2>$null | Out-String
 
-# 1. Base Strategy (Ultimate -> High -> Balanced)
-$BaseGUID = "e9a42b02-d5df-448d-aa00-03f14749eb61" # Ultimate
-if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" } # High Performance
-if (-not (powercfg /L | Select-String $BaseGUID)) { $BaseGUID = "381b4222-f694-41f0-9685-ff5bb260df2e" } # Balanced
-
-# 2. Scheme Enforcement (Fixed GUID Registry Check)
-if (-not (powercfg /L | Select-String $AlbusGUID)) {
-    Status "initializing native albus power container..." "info"
-    powercfg /duplicatescheme $BaseGUID $AlbusGUID *>$null
+# 1. structure container
+if ($PList -notmatch $AlbusGUID) {
+    $Src = @("e9a42b02-d5df-448d-aa00-03f14749eb61","8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c","381b4222-f694-41f0-9685-ff5bb260df2e") | Where-Object { $PList -match $_ } | Select-Object -First 1
+    if ($Src) { & { powercfg /duplicatescheme $Src $AlbusGUID } 2>$null | Out-Null }
 }
-powercfg /changename $AlbusGUID $AlbusName *>$null
-powercfg /setactive $AlbusGUID *>$null
 
-# 3. Purge Other Plans (Safe Cleanup)
-$DefaultPlans = @("381b4222-f694-41f0-9685-ff5bb260df2e", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", "a1841308-3541-4fab-bc81-f71556f20b4a", "e9a42b02-d5df-448d-aa00-03f14749eb61")
-(powercfg /L) | ForEach-Object {
-    if ($_ -match 'GUID:\s+([a-f0-9-]+)') {
-        $P = $Matches[1]
-        if ($P -ne $AlbusGUID -and $DefaultPlans -notcontains $P) {
-            powercfg /delete $P *>$null
+# 2. metadata injection
+$PowerReg = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\$AlbusGUID"
+if (Test-Path $PowerReg) {
+    Set-ItemProperty -Path $PowerReg -Name "FriendlyName" -Value "Albus Power Scheme" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $PowerReg -Name "Description" -Value "optimized for low-latency and peak hardware performance by albus engine." -Force -ErrorAction SilentlyContinue
+}
+& { powercfg /setactive $AlbusGUID } 2>$null | Out-Null
+
+# 3. native low-latency hardware tweaks
+@(
+    "0012ee47-9041-4b5d-9b77-535fba8b1442 6738e2c4-e8a5-4a42-b16a-e040e769756e 0", # disk
+    "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0", # wifi
+    "501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0", # pci-e
+    "238c9fa8-0aad-41ed-83f4-97be242c8f20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0", # sleep
+    "54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100", # cpu min
+    "54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100", # cpu max
+    "54533251-82be-4824-96c1-47b60b740d00 893dee03-5242-4997-a44d-ef36649442f1 1",   # boost
+    "2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0"    # usb
+) | ForEach-Object {
+    if ($_ -match '(?<s>[a-f0-9-]+)\s+(?<i>[a-f0-9-]+)\s+(?<v>\d+)') {
+        $s = $Matches.s; $i = $Matches.i; $v = $Matches.v
+        & { 
+            trap { continue }
+            powercfg /attributes $s $i -ATTRIB_HIDE 2>$null | Out-Null
+            powercfg /setacvalueindex $AlbusGUID $s $i $v 2>$null | Out-Null
+            powercfg /setdcvalueindex $AlbusGUID $s $i $v 2>$null | Out-Null
         }
     }
 }
+& { powercfg /setactive $AlbusGUID } 2>$null | Out-Null
 
-# 4. Global Performance Flags
-powercfg /hibernate off
-$PowerRegs = @(
-    "HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabled|0",
-    "HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabledDefault|0",
-    "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power|HiberbootEnabled|0",
-    "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling|PowerThrottlingOff|1",
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowLockOption|0",
-    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowSleepOption|0"
-)
-foreach ($R in $PowerRegs) {
-    $parts = $R -split '\|'
-    Set-Registry -Path $parts[0] -Name $parts[1] -Value $parts[2]
+# 4. global performance tweaks
+& { powercfg /hibernate off } 2>$null | Out-Null
+@("HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabled|0",
+  "HKLM:\SYSTEM\CurrentControlSet\Control\Power|HibernateEnabledDefault|0",
+  "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power|HiberbootEnabled|0",
+  "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling|PowerThrottlingOff|1",
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowLockOption|0",
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings|ShowSleepOption|0") | ForEach-Object {
+    $p = $_ -split '\|'; Set-Registry -Path $p[0] -Name $p[1] -Value $p[2]
 }
-
-# 5. Monitor Data Store (Disable Auto Color)
 $MonStore = Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore" -Recurse -ErrorAction SilentlyContinue
 foreach ($M in $MonStore) { Set-Registry -Path $M.PSPath -Name "AutoColorManagementEnabled" -Value 0 }
 
-# 6. Native Low-Latency Policy Tuning (Unhiding & Setting)
-Status "enforcing ultra-low latency power attributes..." "info"
-$MasterPowerTweaks = @(
-    # [SUB_GUID] [SETTING_GUID] [VALUE]
-    "0012ee47-9041-4b5d-9b77-535fba8b1442 6738e2c4-e8a5-4a42-b16a-e040e769756e 0",   # Hard Disk Off (Never)
-    "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0",   # Wireless Adapter (Max Perf)
-    "501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0",   # PCI Express Link State (Off)
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0",   # Sleep (Never)
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0",   # Hybrid Sleep (Off)
-    "238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 0",   # Wake Timers (Disable)
-    "54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100", # Processor Min (100%)
-    "54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100", # Processor Max (100%)
-    "54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318583 100", # Core Park Min (100%)
-    "54533251-82be-4824-96c1-47b60b740d00 ea062031-0e34-4ff1-9b6d-eb1059334028 100", # Core Park Max (100%)
-    "54533251-82be-4824-96c1-47b60b740d00 893dee03-5242-4997-a44d-ef36649442f1 1",   # Processor Boost Mode (Aggressive)
-    "54533251-82be-4824-96c1-47b60b740d00 447235c7-4842-4595-ad2a-1c0e5510b159 0",   # Processor Idle Disable
-    "54533251-82be-4824-96c1-47b60b740d00 5d76a2ca-e8c1-4010-a44d-83840f5977d5 0",   # Core Park Min Cores
-    "54533251-82be-4824-96c1-47b60b740d00 06cadf0e-64ed-448a-8927-ce7bf90eb35d 0",   # Core Park Performance State
-    "7516b95f-f776-4464-8c53-06167f40cc99 aded5e82-b909-4619-9949-f5d71dac0bcb 100", # Brightness (100%)
-    "7516b95f-f776-4464-8c53-06167f40cc99 fbd9aa66-9553-4097-ba44-ed6e9d65eab8 0",   # Adaptive Brightness (Off)
-    "44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2",   # Intel Graphics (Max Perf)
-    "f693fb01-e858-4f00-b20f-f30e12ac06d6 191f65b5-d45c-4a4f-8aae-1ab8bfd980e6 1",   # ATI PowerPlay (Max Perf)
-    "e276e160-7cb0-43c6-b20b-73f5dce39954 a1662ab2-9d34-4e53-ba8b-2639b9e20857 3",   # Switchable Graphics (Max Perf)
-    "2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",   # USB Selective Suspend (Off)
-    "2a737441-1930-4402-8d77-b2bebba308a3 d4e98f31-5ffe-4ce1-be31-1b38b384c009 0"    # USB3 Link Power Mgmt (Off)
-)
-
-foreach ($T in $MasterPowerTweaks) {
-    if ($T -match '^#') { continue }
-    $P = $T -split ' '
-    # Unhide attribute first to ensure setting success
-    powercfg /attributes $P[0] $P[1] ATTRIB_HIDE -*>$null
-    # Apply AC and DC values to fixed GUID
-    powercfg /setacvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-    powercfg /setdcvalueindex $AlbusGUID $P[0] $P[1] $P[2] *>$null
-}
-
-# Finalize Active State
-powercfg /setactive $AlbusGUID *>$null
 
 # # --- ALBUS SERVICES: TIMER RESOLUTION & AUDIO ---
 Status "deploying albus core optimization engine..." "step"
