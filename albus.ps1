@@ -1470,6 +1470,9 @@ $ServiceTweaks = @(
     @{ Name = "CSC"; Start = 4 }
     @{ Name = "CSCSERVICE"; Start = 4 }
     @{ Name = "condrv"; Start = 2 }
+    # Extra
+    @{ Name = "OneSyncSvc"; Start = 4 }
+    @{ Name = "TrkWks"; Start = 4 }
 )
 
 foreach ($T in $ServiceTweaks) {
