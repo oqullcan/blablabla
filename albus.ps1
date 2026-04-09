@@ -2408,6 +2408,24 @@ foreach ($D in $PciDevices) {
     }
 }
 
+Status "executing environment cleanups..." "step"
+# purge base directories
+@("inetpub", "PerfLogs", "XboxGames", "Windows.old") | ForEach-Object {
+    if (Test-Path "$env:SystemDrive\$_") { Remove-Item "$env:SystemDrive\$_" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
+}
+if (Test-Path "$env:SystemDrive\DumpStack.log") { Remove-Item "$env:SystemDrive\DumpStack.log" -Force -ErrorAction SilentlyContinue | Out-Null }
+
+# clear runtime temporary stores
+Remove-Item -Path "$env:UserProfile\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+Remove-Item -Path "$env:SystemDrive\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+
+# rebuild systemic performance counters
+& "$env:SystemRoot\system32\lodctr.exe" /R 2>&1 | Out-Null
+& "$env:SystemRoot\SysWOW64\lodctr.exe" /R 2>&1 | Out-Null
+
+Status "running native disk cleanup..." "step"
+Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/autoclean /d C:" -Wait -NoNewWindow
+
 Write-Host ""
 Status "albus-playbook has finished all tasks." "done"
 pause
