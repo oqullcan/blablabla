@@ -1514,7 +1514,7 @@ Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\In
 }
 
 Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue | ForEach-Object {
-    $P = $_.PSPath
+    $P = $_.PSPath  
     $HasSpeedDuplex = Get-ItemProperty -Path $P -Name "*SpeedDuplex" -ErrorAction SilentlyContinue
     if ($HasSpeedDuplex -and -not (Get-ItemProperty -Path $P -Name "*PhyType" -ErrorAction SilentlyContinue)) {
         "EnablePME", "*DeviceSleepOnDisconnect", "*EEE", "AdvancedEEE", "*SipsEnabled", "EnableAspm", "ASPM", "*ModernStandbyWoLMagicPacket", "*SelectiveSuspend", "EnableGigaLite", "GigaLite", "*WakeOnMagicPacket", "*WakeOnPattern", "AutoPowerSaveModeEnabled", "EEELinkAdvertisement", "EeePhyEnable", "EnableGreenEthernet", "EnableModernStandby", "PowerDownPll", "PowerSavingMode", "ReduceSpeedOnPowerDown", "S5WakeOnLan", "SavePowerNowEnabled", "ULPMode", "WakeOnLink", "WakeOnSlot", "WakeOnLinkChg", "WakeOnLinkUp", "WakeUpModeCap", "*NicAutoPowerSaver", "PowerSaveEnable", "EnablePowerManagement", "ForceWakeFromMagicPacketOnModernStandby", "WakeFromS5", "WakeOn", "EnableSavePowerNow", "*EnableDynamicPowerGating", "DynamicPowerGating", "EnableD3ColdInS0", "WakeFromPowerOff", "LogLinkStateEvent" | ForEach-Object {
@@ -1546,14 +1546,14 @@ Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\CloudStore\
 
 # hive config: disable windows client cbs, original apps & autoplay settings natively
 Status "optimizing windows client session apps & hive settings..." "step"
-"AppActions", "CrossDeviceResume", "DesktopStickerEditorWin32Exe", "DiscoveryHubApp", "FESearchHost", "SearchHost", "SoftLandingTask", "TextInputHost", "VisualAssistExe", "WebExperienceHostApp", "WindowsBackupClient", "WindowsMigration" | ForEach-Object {
+"AppActions", "CrossDeviceResume", "DesktopStickerEditorWin32Exe", "DiscoveryHubApp", "FESearchHost", "SearchHost", "SoftLandingTask", "TextInputHost", "VisualAssistExe", "WebExperienceHostApp", "WindowsBackupClient", "WindowsMigration", "ShellExperienceHost", "StartMenuExperienceHost", "Widgets", "WidgetService", "MiniSearchHost" | ForEach-Object {
     Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 1
 
 $SettingsDat = "$env:LOCALAPPDATA\Packages\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\Settings\settings.dat"
 if (Test-Path $SettingsDat) {
-    reg load "HKLM\Settings" $SettingsDat 2>$null
+    & cmd.exe /c "reg load `"HKLM\Settings`" `"$SettingsDat`" 2>nul"
     if ($LASTEXITCODE -eq 0) {
         $State = "HKLM:\Settings\LocalState"
         $Val1  = [byte[]](0x01,0x61,0xed,0x11,0x34,0xf7,0x9f,0xdc,0x01)
