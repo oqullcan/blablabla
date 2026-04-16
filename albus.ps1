@@ -960,7 +960,7 @@ $Tweaks = @(
     # --- LOGGING, OPTIMIZATION & SYSTEM FIXES ---
     @{ Path = "HKLM:\SOFTWARE\Microsoft\ClickToRun\OverRide"; Name = "DisableLogManagement"; Value = 1; Type = "DWord" }
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"; Name = "TimerInterval"; Value = "900000"; Type = "String" }
-    @{ Path = "-HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SPP\Clients"; Name = ""; Value = "" }
+    @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SPP\Clients"; Name = ""; Value = "" }
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore"; Name = "RPSessionInterval"; Value = 0; Type = "DWord" }
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore\cfg"; Name = "DiskPercent"; Value = 0; Type = "DWord" }
     @{ Path = "HKCU:\Software\Microsoft\Internet Explorer\LowRegistry\Audio\PolicyConfig\PropertyStore"; Name = ""; Value = "" }
