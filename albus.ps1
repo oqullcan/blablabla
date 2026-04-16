@@ -1015,7 +1015,7 @@ $Tweaks = @(
     @{ Path = "HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Minimal\MSIServer"; Name = ""; Value = "Service"; Type = "String" }
     @{ Path = "HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Network\MSIServer"; Name = ""; Value = "Service"; Type = "String" }
 
-    # --- ALBUS EDITION & OEM INFO ---
+    # --- REVISION EDITION & OEM INFO ---
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"; Name = "EditionSubManufacturer"; Value = "Albus"; Type = "String" }
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"; Name = "EditionSubstring"; Value = "Albus"; Type = "String" }
     @{ Path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"; Name = "EditionSubVersion"; Value = "Albus"; Type = "String" }
@@ -2008,30 +2008,34 @@ foreach ($App in $UWPToKill) {
     } catch { }
 }
 
-Get-WindowsCapability -Online | Where-Object {
-    $_.State -eq 'Installed' -and
-    $_.Name -notlike '*Ethernet*' -and
-    $_.Name -notlike '*MSPaint*' -and
-    $_.Name -notlike '*Notepad*' -and
-    $_.Name -notlike '*Wifi*' -and
-    $_.Name -notlike '*NetFX3*' -and
-    $_.Name -notlike '*VBSCRIPT*' -and
-    $_.Name -notlike '*WMIC*' -and
-    $_.Name -notlike '*ShellComponents*'
-} | ForEach-Object { try { Remove-WindowsCapability -Online -Name $_.Name -ErrorAction SilentlyContinue | Out-Null } catch {} }
+try {
+    Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
+        $_.State -eq 'Installed' -and
+        $_.Name -notlike '*Ethernet*' -and
+        $_.Name -notlike '*MSPaint*' -and
+        $_.Name -notlike '*Notepad*' -and
+        $_.Name -notlike '*Wifi*' -and
+        $_.Name -notlike '*NetFX3*' -and
+        $_.Name -notlike '*VBSCRIPT*' -and
+        $_.Name -notlike '*WMIC*' -and
+        $_.Name -notlike '*ShellComponents*'
+    } | ForEach-Object { try { Remove-WindowsCapability -Online -Name $_.Name -ErrorAction SilentlyContinue | Out-Null } catch {} }
+} catch { }
 
-Get-WindowsOptionalFeature -Online | Where-Object {
-    $_.State -eq 'Enabled' -and
-    $_.FeatureName -notlike '*DirectPlay*' -and
-    $_.FeatureName -notlike '*LegacyComponents*' -and
-    $_.FeatureName -notlike '*NetFx*' -and
-    $_.FeatureName -notlike '*SearchEngine-Client*' -and
-    $_.FeatureName -notlike '*Server-Shell*' -and
-    $_.FeatureName -notlike '*Windows-Defender*' -and
-    $_.FeatureName -notlike '*Drivers-General*' -and
-    $_.FeatureName -notlike '*Server-Gui-Mgmt*' -and
-    $_.FeatureName -notlike '*WirelessNetworking*'
-} | ForEach-Object { try { Disable-WindowsOptionalFeature -Online -FeatureName $_.FeatureName -NoRestart -WarningAction SilentlyContinue | Out-Null } catch {} }
+try {
+    Get-WindowsOptionalFeature -Online -ErrorAction Stop | Where-Object {
+        $_.State -eq 'Enabled' -and
+        $_.FeatureName -notlike '*DirectPlay*' -and
+        $_.FeatureName -notlike '*LegacyComponents*' -and
+        $_.FeatureName -notlike '*NetFx*' -and
+        $_.FeatureName -notlike '*SearchEngine-Client*' -and
+        $_.FeatureName -notlike '*Server-Shell*' -and
+        $_.FeatureName -notlike '*Windows-Defender*' -and
+        $_.FeatureName -notlike '*Drivers-General*' -and
+        $_.FeatureName -notlike '*Server-Gui-Mgmt*' -and
+        $_.FeatureName -notlike '*WirelessNetworking*'
+    } | ForEach-Object { try { Disable-WindowsOptionalFeature -Online -FeatureName $_.FeatureName -NoRestart -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Out-Null } catch {} }
+} catch { }
 
 Status "uninstalling edge, onedrive, health tools, legacy apps..." "step"
 # region spoof (us) to bypass restrictions
