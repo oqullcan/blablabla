@@ -3,6 +3,24 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# --- 64-BIT ARCHITECTURE ENFORCEMENT ---
+if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64' -and -not [Environment]::Is64BitProcess) {
+    if (Test-Path "$env:windir\sysnative\WindowsPowerShell\v1.0\powershell.exe") {
+        & "$env:windir\sysnative\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -NoProfile -File $PSCommandPath
+        exit
+    }
+}
+
+# --- ACTIVE USER SID RESOLVER ---
+# Prevents HKCU keys from being written to SYSTEM/Default profile when running as TrustedInstaller or SYSTEM via MinSudo
+$script:ActiveSID = $null
+try {
+    $explorerProc = Get-WmiObject Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($explorerProc) {
+        $script:ActiveSID = $explorerProc.GetOwnerSid().Sid
+    }
+} catch { }
+
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $Privilege = $Identity.Split('\')[-1]
 [Console]::Title = "Albus Playbook - $Privilege"
@@ -28,38 +46,56 @@ function Set-Registry {
         [string]$Type = "DWord"
     )
     try {
-        $CleanPath = $Path.Replace("HKLM:", "HKEY_LOCAL_MACHINE").Replace("HKCU:", "HKEY_CURRENT_USER").Replace("HKCR:", "HKEY_CLASSES_ROOT").Replace("HKU:", "HKEY_USERS")
+        $Prefix = if ($Path.StartsWith("-")) { "-" } else { "" }
+        $ActualPath = if ($Path.StartsWith("-")) { $Path.Substring(1) } else { $Path }
+
+        $ResolveHKCU = "HKEY_CURRENT_USER"
+        $ResolvePS = "HKCU:"
+        if ($script:ActiveSID) { 
+            $ResolveHKCU = "HKEY_USERS\$script:ActiveSID" 
+            $ResolvePS = "Registry::HKEY_USERS\$script:ActiveSID"
+        }
+
+        # For reg.exe and native paths
+        $CleanPath = $ActualPath.Replace("HKLM:", "HKEY_LOCAL_MACHINE").Replace("HKCU:", $ResolveHKCU).Replace("HKCR:", "HKEY_CLASSES_ROOT").Replace("HKU:", "HKEY_USERS")
         
-        if ($Path.StartsWith("-")) {
-            $RealPath = $Path.Substring(1)
-            if ($Path -like "*-HKCR*") {
-                & reg.exe delete "$($CleanPath.Substring(1))" /f 2>&1 | Out-Null
+        # For PowerShell cmdlets
+        $PSPath = $ActualPath.Replace("HKLM:", "Registry::HKEY_LOCAL_MACHINE").Replace("HKCU:", $ResolvePS).Replace("HKCR:", "Registry::HKEY_CLASSES_ROOT").Replace("HKU:", "Registry::HKEY_USERS")
+
+        if ($Prefix -eq "-") {
+            if ($CleanPath -like "*HKEY_CLASSES_ROOT*") {
+                & cmd.exe /c "reg delete `"$CleanPath`" /f 2>nul"
             } else {
-                if (Test-Path $RealPath) { Remove-Item -Path $RealPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
+                if (Test-Path $PSPath) { Remove-Item -Path $PSPath -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
             }
             return
         }
 
         if ($Value -eq "-") {
-            if (Test-Path $Path) { Remove-ItemProperty -Path $Path -Name $Name -Force -ErrorAction SilentlyContinue | Out-Null }
+            if (Test-Path $PSPath) { Remove-ItemProperty -Path $PSPath -Name $Name -Force -ErrorAction SilentlyContinue | Out-Null }
             return
         }
 
-        if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+        if (-not (Test-Path $PSPath)) { New-Item -Path $PSPath -Force -ErrorAction SilentlyContinue | Out-Null }
 
         if ($Name -eq "") {
-            Set-Item -Path $Path -Value $Value -Force | Out-Null
+            Set-Item -Path $PSPath -Value $Value -Force -ErrorAction SilentlyContinue | Out-Null
         } else {
             $PT = if ($Type -eq "QWord") { "QWord" } else { $Type }
             try {
-                New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PT -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -Path $PSPath -Name $Name -Value $Value -PropertyType $PT -Force -ErrorAction Stop | Out-Null
             } catch {
                 $RegType = switch ($Type) {
                     "DWord"  { "REG_DWORD" } "String" { "REG_SZ" } "Binary" { "REG_BINARY" }
                     "QWord"  { "REG_QWORD" } "ExpandString" { "REG_EXPAND_SZ" } Default { "REG_DWORD" }
                 }
                 $FinalValue = if ($Type -eq "Binary") { ($Value | ForEach-Object { "{0:X2}" -f $_ }) -join "" } else { $Value }
-                & reg.exe add "$CleanPath" /v "$Name" /t $RegType /d $FinalValue /f 2>&1 | Out-Null
+                & cmd.exe /c "reg add `"$CleanPath`" /v `"$Name`" /t $RegType /d `"$FinalValue`" /f 2>nul"
+                
+                if ($LASTEXITCODE -ne 0) {
+                    if (-not (Test-Path "C:\Albus")) { New-Item -ItemType Directory -Path "C:\Albus" -Force | Out-Null }
+                    Add-Content -Path "C:\Albus\albus_error.log" -Value "[$(Get-Date -Format 'HH:mm:ss')] FAIL -> $CleanPath\$Name" -ErrorAction SilentlyContinue
+                }
             }
         }
     } catch {
@@ -1472,10 +1508,16 @@ foreach ($T in $ServiceTweaks) {
 
 Status "disabling background system tasks..." "step"
 $TasksToDisable = @(
+    "Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
+    "Microsoft\Windows\Application Experience\ProgramDataUpdater",
+    "Microsoft\Windows\Application Experience\StartupAppTask",
     "Microsoft\Windows\Application Experience\PcaPatchDbTask",
     "Microsoft\Windows\AppxDeploymentClient\UCPD Velocity",
+    "Microsoft\Windows\Autochk\Proxy",
     "Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
     "Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+    "Microsoft\Windows\Customer Experience Improvement Program\BthSQM",
+    "Microsoft\Windows\Customer Experience Improvement Program\Uploader",
     "Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
     "Microsoft\Windows\ExploitGuard\ExploitGuard MDM Policy Refresh",
     "Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance",
@@ -1483,7 +1525,10 @@ $TasksToDisable = @(
     "Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan",
     "Microsoft\Windows\Windows Defender\Windows Defender Verification",
     "Microsoft\Windows\Flighting\FeatureConfig\UsageDataReporting",
-    "Microsoft\Windows\Defrag\ScheduledDefrag"
+    "Microsoft\Windows\Defrag\ScheduledDefrag",
+    "Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem",
+    "Microsoft\Windows\Feedback\Siuf\DmClient",
+    "Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload"
 )
 foreach ($Task in $TasksToDisable) {
     Disable-ScheduledTask -TaskPath "\" -TaskName ($Task -split "\\")[-1] -ErrorAction SilentlyContinue | Out-Null
@@ -1502,9 +1547,22 @@ Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue | Out-Null
 Get-BitLockerVolume -ErrorAction SilentlyContinue | Where-Object { $_.ProtectionStatus -eq "On" } | Disable-BitLocker -ErrorAction SilentlyContinue | Out-Null
 
 # network: tcp latency, interface offloading & power states
-Status "optimizing network logic (latency, nagle's algorithm & adapter sleep)..." "step"
+Status "optimizing network logic (latency, nagle's algorithm, rss & adapter sleep)..." "step"
+
+# advanced kernel / hw offloading (rss, lso, rsc)
+& netsh int tcp set global autotuninglevel=restricted 2>&1 | Out-Null
+& netsh int tcp set global ecncapability=disabled 2>&1 | Out-Null
+& netsh int tcp set global timestamps=disabled 2>&1 | Out-Null
+& netsh int tcp set global initialRto=2000 2>&1 | Out-Null
+& netsh int tcp set global rss=enabled 2>&1 | Out-Null
+& netsh int tcp set global rsc=disabled 2>&1 | Out-Null
+& netsh int tcp set global nonsackrttresiliency=disabled 2>&1 | Out-Null
+
+Disable-NetAdapterLso -Name "*" -IPv4 -ErrorAction SilentlyContinue | Out-Null
+Set-NetAdapterAdvancedProperty -Name "*" -DisplayName "Interrupt Moderation" -DisplayValue "Disabled" -ErrorAction SilentlyContinue | Out-Null
+
 'ms_lldp', 'ms_lltdio', 'ms_implat', 'ms_rspndr', 'ms_tcpip6', 'ms_server', 'ms_msclient', 'ms_pacer' | ForEach-Object {
-    Disable-NetAdapterBinding -Name "*" -ComponentID $_ -ErrorAction SilentlyContinue
+    Disable-NetAdapterBinding -Name "*" -ComponentID $_ -ErrorAction SilentlyContinue | Out-Null
 }
 
 Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" -ErrorAction SilentlyContinue | ForEach-Object {
