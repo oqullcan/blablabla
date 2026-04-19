@@ -144,7 +144,7 @@ $AutoUnattendXml = @'
                 <SynchronousCommand wcm:action="add">
                     <Order>1</Order>
                     <Description>Albus Playbook Shortcut.</Description>
-                    <CommandLine>powershell -NoProfile -Command "$wshell = New-Object -ComObject WScript.Shell; $s = $wshell.CreateShortcut('C:\Users\Public\Desktop\Albus-PB.lnk'); $s.TargetPath = 'powershell.exe'; $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -Command &quot;irm https://raw.githubusercontent.com/oqullcan/blablabla/refs/heads/main/run.ps1 | iex&quot;'; $s.IconLocation = 'powershell.exe,0'; $s.Save()"</CommandLine>
+                    <CommandLine>powershell -NoProfile -Command "$wshell = New-Object -ComObject WScript.Shell; $s = $wshell.CreateShortcut('C:\Users\Public\Desktop\Albus-PB.lnk'); $s.TargetPath = 'powershell.exe'; $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -Command &quot;irm https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/run.ps1 | iex&quot;'; $s.IconLocation = 'powershell.exe,0'; $s.Save()"</CommandLine>
                 </SynchronousCommand>
             </FirstLogonCommands>
         </component>
