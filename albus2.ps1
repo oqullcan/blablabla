@@ -149,8 +149,6 @@ if (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction Silentl
             Start-Process -Wait "$dest\7zip.exe" -ArgumentList "/S"
             Set-Registry "HKCU:\Software\7-Zip\Options" "ContextMenu"   259 "DWord"
             Set-Registry "HKCU:\Software\7-Zip\Options" "CascadedMenu"  0   "DWord"
-            Move-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip\7-Zip File Manager.lnk" & "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue | Out-Null
-            Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip" -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
             status "7-zip installed." "done"
         }
     } catch { status "failed to install 7-zip." "fail" }
