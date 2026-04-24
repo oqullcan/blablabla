@@ -1497,7 +1497,7 @@ $ServiceTweaks = @(
 
 foreach ($T in $ServiceTweaks) {
     if (Get-Service -Name $T.Name -ErrorAction SilentlyContinue) {
-        Stop-Service -Name $T.Name -Force -ErrorAction SilentlyContinue
+        # Stop-Service -Name $T.Name -Force -ErrorAction SilentlyContinue
         $SType = switch($T.Start) { 2 { "Automatic" } 3 { "Manual" } 4 { "Disabled" } }
         Set-Service -Name $T.Name -StartupType $SType -ErrorAction SilentlyContinue
         Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$($T.Name)" -Name "Start" -Value $T.Start -Type "DWord"
