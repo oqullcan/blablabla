@@ -186,6 +186,11 @@ if (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction Silentl
 #>
 # =============================================================================================================================================================================
 
+# privacy & security: clear app permissions (resets capability consent storage to default/deny)
+Status "resetting privacy & security app permissions database..." "step"
+Stop-Service -Name 'camsvc' -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$env:ProgramData\Microsoft\Windows\CapabilityAccessManager\CapabilityConsentStorage.db*" -Force -ErrorAction SilentlyContinue
+
 Status "executing registry optimization engine..." "step"
 
 # Ensure all standard registry drives are mapped
@@ -1533,11 +1538,6 @@ foreach ($Task in $TasksToDisable) {
 }
 
 Status "performing post-optimization system tweaks..." "step"
-
-# privacy & security: clear app permissions (resets capability consent storage to default/deny)
-Status "resetting privacy & security app permissions database..." "step"
-Stop-Service -Name 'camsvc' -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$env:ProgramData\Microsoft\Windows\CapabilityAccessManager\CapabilityConsentStorage.db*" -Force -ErrorAction SilentlyContinue
 
 # memory & storage: disable compression and suspend active bitlocker drives
 Status "optimizing memory & storage security..." "step"
