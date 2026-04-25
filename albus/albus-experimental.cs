@@ -19,9 +19,9 @@ using System.Threading;
 
 namespace AlbusCore
 {
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // game profiles
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     static class GameProfiles
     {
@@ -58,7 +58,6 @@ namespace AlbusCore
             new Profile
             {
                 Name                    = "lol",
-                // lol is sensitive to priority changes — only ws lock and mmcss
                 Executables             = new[] { "league of legends.exe", "leagueclient.exe" },
                 LockWorkingSet          = true,
                 MmcssInject             = true,
@@ -95,9 +94,9 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // structured logger — event log + C:\Albus\albusx.log (json lines)
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
+    // structured logger
+    // —————————————————————————————————————————————————————————————————————————
 
     static class Log
     {
@@ -118,22 +117,28 @@ namespace AlbusCore
 
         public static void Write(string engine, string evt, string detail = null)
         {
-            string ts   = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-            string msg  = detail != null ? $"[{engine}] {evt} — {detail}" : $"[{engine}] {evt}";
+            string ts  = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+            string msg = detail != null
+                ? "[" + engine + "] " + evt + " \u2014 " + detail
+                : "[" + engine + "] " + evt;
             string json = detail != null
-                ? $"{{\"ts\":\"{ts}\",\"engine\":\"{engine}\",\"event\":\"{evt}\",\"detail\":\"{Esc(detail)}\"}}"
-                : $"{{\"ts\":\"{ts}\",\"engine\":\"{engine}\",\"event\":\"{evt}\"}}";
+                ? "{\"ts\":\"" + ts + "\",\"engine\":\"" + engine + "\",\"event\":\"" + evt + "\",\"detail\":\"" + Esc(detail) + "\"}"
+                : "{\"ts\":\"" + ts + "\",\"engine\":\"" + engine + "\",\"event\":\"" + evt + "\"}";
 
-            try { _ev?.WriteEntry(msg); } catch { }
+            try { if (_ev != null) _ev.WriteEntry(msg); } catch { }
             lock (FileLock) { try { File.AppendAllText(LogPath, json + "\n"); } catch { } }
         }
 
-        static string Esc(string s) => s?.Replace("\"", "\\\"").Replace("\n", " ") ?? "";
+        static string Esc(string s)
+        {
+            if (s == null) return "";
+            return s.Replace("\"", "\\\"").Replace("\n", " ");
+        }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // engine interface
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     interface IEngine
     {
@@ -143,9 +148,9 @@ namespace AlbusCore
         void Stop();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // service entry
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class AlbusService : ServiceBase
     {
@@ -167,7 +172,7 @@ namespace AlbusCore
             CanShutdown                 = true;
         }
 
-        static void Main() => ServiceBase.Run(new AlbusService());
+        static void Main() { ServiceBase.Run(new AlbusService()); }
 
         protected override void OnStart(string[] args)
         {
@@ -209,16 +214,16 @@ namespace AlbusCore
         protected override void OnStop()
         {
             try { NativeMethods.SetThreadExecutionState(0x80000000); } catch { }
-            _watchdog?.Stop();
-            _process?.Stop();
-            _interrupt?.Stop();
-            _memory?.Stop();
-            _audio?.Stop();
-            _timer?.Stop();
+            if (_watchdog  != null) _watchdog.Stop();
+            if (_process   != null) _process.Stop();
+            if (_interrupt != null) _interrupt.Stop();
+            if (_memory    != null) _memory.Stop();
+            if (_audio     != null) _audio.Stop();
+            if (_timer     != null) _timer.Stop();
             Log.Write("service", "stopped");
         }
 
-        protected override void OnShutdown() => OnStop();
+        protected override void OnShutdown() { OnStop(); }
 
         protected override bool OnPowerEvent(PowerBroadcastStatus status)
         {
@@ -226,18 +231,18 @@ namespace AlbusCore
                 status == PowerBroadcastStatus.ResumeAutomatic)
             {
                 Thread.Sleep(2000);
-                _timer?.ForceReapply();
-                _interrupt?.Reapply();
-                _memory?.Purge("resume");
+                if (_timer     != null) _timer.ForceReapply();
+                if (_interrupt != null) _interrupt.Reapply();
+                if (_memory    != null) _memory.Purge("resume");
                 Log.Write("service", "resume", "re-applied after sleep");
             }
             return true;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // watchdog — restarts any engine silent for >60s
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
+    // watchdog — restarts any engine silent >60s
+    // —————————————————————————————————————————————————————————————————————————
 
     class WatchdogEngine
     {
@@ -252,9 +257,9 @@ namespace AlbusCore
                 TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
         }
 
-        public void Stop() => _timer?.Dispose();
+        public void Stop() { if (_timer != null) _timer.Dispose(); }
 
-        void Tick(object _)
+        void Tick(object state)
         {
             foreach (var e in _engines)
             {
@@ -263,7 +268,8 @@ namespace AlbusCore
                     double age = (DateTime.UtcNow - e.LastHeartbeat).TotalSeconds;
                     if (age > 60)
                     {
-                        Log.Write("watchdog", "restart", $"engine={e.Name} silent={age:F0}s");
+                        Log.Write("watchdog", "restart",
+                            "engine=" + e.Name + " silent=" + age.ToString("F0") + "s");
                         try { e.Stop(); } catch { }
                         Thread.Sleep(500);
                         try { e.Start(); } catch { }
@@ -274,40 +280,33 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // timer engine 2.0
-    //
-    // drift protection — three types:
-    //   passive      kernel silently raises resolution (lower precision)
-    //   override     another process fights for lower precision and wins
-    //   hardware     USB/driver event resets the timer subsystem
-    //
-    // extras:
-    //   timer coalescing disabled via NtSetSystemInformation class 181
-    //   high-res waitable timer held open to anchor the clock
-    //   precision thread: NtDelayExecution + spinwait for last ~50µs
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class TimerEngine : IEngine
     {
-        public string   Name          => "timer";
-        public DateTime LastHeartbeat { get; private set; } = DateTime.UtcNow;
+        public string Name { get { return "timer"; } }
+
+        private DateTime _lastHeartbeat = DateTime.UtcNow;
+        public DateTime LastHeartbeat   { get { return _lastHeartbeat; } }
 
         uint _min, _max, _default, _target;
         long _passiveDrifts, _externalOverrides, _hwDrifts;
 
-        Timer          _guardTimer;
-        Thread         _precisionThread;
-        IntPtr         _hTimer  = IntPtr.Zero;
-        volatile bool  _running = false;
+        Timer         _guardTimer;
+        Thread        _precisionThread;
+        IntPtr        _hTimer  = IntPtr.Zero;
+        volatile bool _running = false;
 
-        const int   GUARD_MS        = 5000;
-        const uint  DRIFT_TOLERANCE = 500;  // 50µs in 100ns units
-        const int   CLASS_181       = 181;  // NtSetSystemInformation — timer coalescing
+        const int  GUARD_MS        = 5000;
+        const uint DRIFT_TOLERANCE = 500;   // 50 µs in 100-ns units
+        const int  CLASS_181       = 181;   // timer coalescing
 
         public void Start()
         {
-            NativeMethods.NtQueryTimerResolution(out _min, out _max, out _, out uint current);
+            uint reserved, current;
+            NativeMethods.NtQueryTimerResolution(out _min, out _max, out reserved, out current);
             _default = current;
             _target  = _max;
 
@@ -318,14 +317,14 @@ namespace AlbusCore
             StartGuard();
 
             Log.Write("timer", "started",
-                $"min={_min} max={_max} default={_default} target={_target}");
+                "min=" + _min + " max=" + _max + " default=" + _default + " target=" + _target);
         }
 
         public void Stop()
         {
             _running = false;
-            _guardTimer?.Dispose();
-            _precisionThread?.Join(1000);
+            if (_guardTimer      != null) _guardTimer.Dispose();
+            if (_precisionThread != null) _precisionThread.Join(1000);
 
             if (_hTimer != IntPtr.Zero)
             {
@@ -337,14 +336,15 @@ namespace AlbusCore
             {
                 uint a = 0;
                 NativeMethods.NtSetTimerResolution(_default, true, out a);
-                Log.Write("timer", "restored", $"resolution={a}");
+                Log.Write("timer", "restored", "resolution=" + a);
             } catch { }
         }
 
         public void ForceReapply()
         {
-            Apply(out uint a);
-            Log.Write("timer", "force-reapply", $"actual={a}");
+            uint a;
+            Apply(out a);
+            Log.Write("timer", "force-reapply", "actual=" + a);
         }
 
         void DisableCoalescing()
@@ -364,13 +364,11 @@ namespace AlbusCore
             {
                 _hTimer = NativeMethods.CreateWaitableTimerExW(
                     IntPtr.Zero, null,
-                    0x00000002,  // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+                    0x00000002,   // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
                     0x1F0003);
             } catch { }
         }
 
-        // precision thread — keeps resolution alive against external pressure
-        // NtDelayExecution for bulk wait + spinwait for final ~50µs
         void StartPrecisionThread()
         {
             _running         = true;
@@ -380,7 +378,7 @@ namespace AlbusCore
                 try { Thread.CurrentThread.Priority = ThreadPriority.Highest; } catch { }
                 try { NativeMethods.SetThreadIdealProcessor(NativeMethods.GetCurrentThread(), 1); } catch { }
 
-                long oneMs = -10000L; // 1ms in 100ns negative units
+                long oneMs = -10000L; // 1 ms in 100-ns negative units
 
                 while (_running)
                 {
@@ -388,13 +386,12 @@ namespace AlbusCore
                     {
                         NativeMethods.NtDelayExecution(false, ref oneMs);
 
-                        // spinwait for last ~50µs
                         long deadline = Stopwatch.GetTimestamp() +
                             (long)(Stopwatch.Frequency * 0.00005);
                         while (Stopwatch.GetTimestamp() < deadline)
                             Thread.SpinWait(10);
 
-                        LastHeartbeat = DateTime.UtcNow;
+                        _lastHeartbeat = DateTime.UtcNow;
                     }
                     catch { }
                 }
@@ -410,15 +407,17 @@ namespace AlbusCore
                 TimeSpan.FromMilliseconds(GUARD_MS));
         }
 
-        void Tick(object _)
+        void Tick(object state)
         {
             try
             {
-                NativeMethods.NtQueryTimerResolution(out _, out _, out _, out uint actual);
+                uint d1, d2, d3, actual;
+                NativeMethods.NtQueryTimerResolution(out d1, out d2, out d3, out actual);
 
                 if (actual > _target + DRIFT_TOLERANCE)
                 {
-                    Apply(out uint corrected);
+                    uint corrected;
+                    Apply(out corrected);
 
                     string type;
                     if (actual > _default + 5000)
@@ -438,16 +437,17 @@ namespace AlbusCore
                     }
 
                     Log.Write("timer", "drift-corrected",
-                        $"type={type} actual={actual} corrected={corrected} " +
-                        $"passive={_passiveDrifts} override={_externalOverrides} hw={_hwDrifts}");
+                        "type=" + type + " actual=" + actual + " corrected=" + corrected +
+                        " passive=" + _passiveDrifts + " override=" + _externalOverrides +
+                        " hw=" + _hwDrifts);
                 }
 
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
 
-        void Apply() { Apply(out _); }
+        void Apply() { uint dummy; Apply(out dummy); }
 
         void Apply(out uint actual)
         {
@@ -457,7 +457,8 @@ namespace AlbusCore
                 for (int i = 0; i < 10; i++)
                 {
                     NativeMethods.NtSetTimerResolution(_target, true, out actual);
-                    NativeMethods.NtQueryTimerResolution(out _, out _, out _, out uint q);
+                    uint d1, d2, d3, q;
+                    NativeMethods.NtQueryTimerResolution(out d1, out d2, out d3, out q);
                     if (q <= _target + DRIFT_TOLERANCE) break;
                     Thread.SpinWait(5000);
                 }
@@ -466,19 +467,16 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // audio engine 2.0
-    //
-    // wasapi shared mode minimum buffer for all endpoints
-    // proper com lifecycle — stop, reset, releasecomobject on every swap
-    // device hot-swap with 800ms settle delay
-    // static mmcss injection for game process threads (called by process engine)
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class AudioEngine : IEngine
     {
-        public string   Name          => "audio";
-        public DateTime LastHeartbeat { get; private set; } = DateTime.UtcNow;
+        public string Name { get { return "audio"; } }
+
+        private DateTime _lastHeartbeat = DateTime.UtcNow;
+        public DateTime LastHeartbeat   { get { return _lastHeartbeat; } }
 
         readonly List<object> _clients = new List<object>();
         readonly object       _lock    = new object();
@@ -523,7 +521,7 @@ namespace AlbusCore
             }
             catch (Exception ex) { Log.Write("audio", "init-failed", ex.Message); }
 
-            while (_running) { Thread.Sleep(1000); LastHeartbeat = DateTime.UtcNow; }
+            while (_running) { Thread.Sleep(1000); _lastHeartbeat = DateTime.UtcNow; }
         }
 
         void OptimizeAll()
@@ -531,21 +529,26 @@ namespace AlbusCore
             try
             {
                 var iid = new Guid("7ED4EE07-8E67-464A-ACE2-EE41ED53CDFE");
-                _enum.EnumAudioEndpoints(2, 1, out IMMDeviceCollection col);
-                col.GetCount(out uint count);
+                IMMDeviceCollection col;
+                _enum.EnumAudioEndpoints(2, 1, out col);
+                uint count;
+                col.GetCount(out count);
 
                 for (uint i = 0; i < count; i++)
                 {
                     try
                     {
-                        col.Item(i, out IMMDevice dev);
-                        dev.Activate(ref iid, 0x17, IntPtr.Zero, out object obj);
+                        IMMDevice dev;
+                        col.Item(i, out dev);
+                        object obj;
+                        dev.Activate(ref iid, 0x17, IntPtr.Zero, out obj);
                         var client = (IAudioClient3)obj;
 
-                        client.GetMixFormat(out IntPtr pFmt);
-                        var fmt = Marshal.PtrToStructure<WAVEFORMATEX>(pFmt);
-                        client.GetSharedModeEnginePeriod(
-                            pFmt, out uint def, out _, out uint min, out _);
+                        IntPtr pFmt;
+                        client.GetMixFormat(out pFmt);
+                        var fmt = (WAVEFORMATEX)Marshal.PtrToStructure(pFmt, typeof(WAVEFORMATEX));
+                        uint def, dummy1, min, dummy2;
+                        client.GetSharedModeEnginePeriod(pFmt, out def, out dummy1, out min, out dummy2);
 
                         if (min < def && min > 0 &&
                             client.InitializeSharedAudioStream(0, min, pFmt, IntPtr.Zero) == 0 &&
@@ -555,7 +558,8 @@ namespace AlbusCore
                             double minMs = (min / (double)fmt.nSamplesPerSec) * 1000.0;
                             double defMs = (def / (double)fmt.nSamplesPerSec) * 1000.0;
                             Log.Write("audio", "optimized",
-                                $"{defMs:F2}ms→{minMs:F2}ms frames={def}→{min}");
+                                defMs.ToString("F2") + "ms\u2192" + minMs.ToString("F2") +
+                                "ms frames=" + def + "\u2192" + min);
                         }
 
                         Marshal.FreeCoTaskMem(pFmt);
@@ -563,7 +567,7 @@ namespace AlbusCore
                     catch { }
                 }
 
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
@@ -579,7 +583,6 @@ namespace AlbusCore
             _clients.Clear();
         }
 
-        // inject mmcss pro audio on all threads of a game process
         public static void InjectMmcss(int pid)
         {
             try
@@ -591,7 +594,7 @@ namespace AlbusCore
                     try   { uint idx = 0; NativeMethods.AvSetMmThreadCharacteristics("Pro Audio", ref idx); }
                     finally { NativeMethods.CloseHandle(h); }
                 }
-                Log.Write("audio", "mmcss-injected", $"pid={pid}");
+                Log.Write("audio", "mmcss-injected", "pid=" + pid);
             }
             catch { }
         }
@@ -608,18 +611,16 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // memory engine 2.0
-    //
-    // standby list purge when available ram < 1gb
-    // working set lock / unlock for game processes (called by process engine)
-    // periodic working set trim for service itself
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class MemoryEngine : IEngine
     {
-        public string   Name          => "memory";
-        public DateTime LastHeartbeat { get; private set; } = DateTime.UtcNow;
+        public string Name { get { return "memory"; } }
+
+        private DateTime _lastHeartbeat = DateTime.UtcNow;
+        public DateTime LastHeartbeat   { get { return _lastHeartbeat; } }
 
         Timer _timer;
         const long THRESHOLD_MB = 1024;
@@ -631,17 +632,16 @@ namespace AlbusCore
                 TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5));
         }
 
-        public void Stop() => _timer?.Dispose();
+        public void Stop() { if (_timer != null) _timer.Dispose(); }
 
         public void Purge(string reason)
         {
             try { NativeMethods.SetSystemFileCacheSize(new IntPtr(-1), new IntPtr(-1), 0); } catch { }
             try { int cmd = 4; NativeMethods.NtSetSystemInformation(80, ref cmd, sizeof(int)); } catch { }
             Trim();
-            Log.Write("memory", "purged", $"reason={reason}");
+            Log.Write("memory", "purged", "reason=" + reason);
         }
 
-        // lock game process pages in ram — prevents page fault latency spikes
         public static void LockWorkingSet(int pid)
         {
             try
@@ -652,8 +652,9 @@ namespace AlbusCore
                     proc.Handle,
                     (IntPtr)ws,
                     (IntPtr)(ws * 2),
-                    0x00000001 | 0x00000002); // HARDWS_MIN_ENABLE | HARDWS_MAX_DISABLE
-                Log.Write("memory", "ws-locked", $"pid={pid} size={ws / 1024 / 1024}mb");
+                    0x00000001 | 0x00000002);
+                Log.Write("memory", "ws-locked",
+                    "pid=" + pid + " size=" + (ws / 1024 / 1024) + "mb");
             }
             catch { }
         }
@@ -665,12 +666,12 @@ namespace AlbusCore
                 var proc = Process.GetProcessById(pid);
                 NativeMethods.SetProcessWorkingSetSizeEx(
                     proc.Handle, (IntPtr)(-1), (IntPtr)(-1), 0);
-                Log.Write("memory", "ws-unlocked", $"pid={pid}");
+                Log.Write("memory", "ws-unlocked", "pid=" + pid);
             }
             catch { }
         }
 
-        void Tick(object _)
+        void Tick(object state)
         {
             try
             {
@@ -679,11 +680,11 @@ namespace AlbusCore
                 pc.Dispose();
 
                 if (avail < THRESHOLD_MB)
-                    Purge($"threshold avail={avail:F0}mb");
+                    Purge("threshold avail=" + avail.ToString("F0") + "mb");
                 else
                     Trim();
 
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
@@ -694,18 +695,16 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // interrupt engine 2.0
-    //
-    // moves NIC, audio, USB interrupts to core 0 via registry affinity policy
-    // reapplied every 30s — device hot-plug resets affinity
-    // DPC latency monitoring via NtQuerySystemInformation class 8
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class InterruptEngine : IEngine
     {
-        public string   Name          => "interrupt";
-        public DateTime LastHeartbeat { get; private set; } = DateTime.UtcNow;
+        public string Name { get { return "interrupt"; } }
+
+        private DateTime _lastHeartbeat = DateTime.UtcNow;
+        public DateTime LastHeartbeat   { get { return _lastHeartbeat; } }
 
         Timer _guardTimer;
         Timer _dpcTimer;
@@ -714,10 +713,10 @@ namespace AlbusCore
         {
             Reapply();
 
-            _guardTimer = new Timer(_ =>
+            _guardTimer = new Timer(delegate(object state)
             {
                 Reapply();
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }, null,
             TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
@@ -729,11 +728,11 @@ namespace AlbusCore
 
         public void Stop()
         {
-            _guardTimer?.Dispose();
-            _dpcTimer?.Dispose();
+            if (_guardTimer != null) _guardTimer.Dispose();
+            if (_dpcTimer   != null) _dpcTimer.Dispose();
         }
 
-        public void Reapply() => SetAffinity();
+        public void Reapply() { SetAffinity(); }
 
         void SetAffinity()
         {
@@ -753,11 +752,11 @@ namespace AlbusCore
                             {
                                 try
                                 {
-                                    string path = $@"{basePath}\{bus}\{dev}\Device Parameters\Interrupt Management\Affinity Policy";
+                                    string path = basePath + "\\" + bus + "\\" + dev +
+                                        "\\Device Parameters\\Interrupt Management\\Affinity Policy";
                                     using (var k = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(path, true))
                                     {
                                         if (k == null) continue;
-                                        // core 0 only
                                         k.SetValue("AssignmentSetOverride",
                                             new byte[] { 0x01, 0, 0, 0, 0, 0, 0, 0 },
                                             Microsoft.Win32.RegistryValueKind.Binary);
@@ -774,13 +773,14 @@ namespace AlbusCore
             catch { }
         }
 
-        void DpcTick(object _)
+        void DpcTick(object state)
         {
             try
             {
-                int   size = 48 * Environment.ProcessorCount;
-                var   buf  = new byte[size];
-                int   ret  = NativeMethods.NtQuerySystemInformationRaw(8, buf, size, out int _);
+                int size = 48 * Environment.ProcessorCount;
+                var buf  = new byte[size];
+                int returned;
+                int ret  = NativeMethods.NtQuerySystemInformationRaw(8, buf, size, out returned);
 
                 if (ret == 0)
                 {
@@ -789,34 +789,31 @@ namespace AlbusCore
                         total += BitConverter.ToInt64(buf, i * 48 + 24);
 
                     if (total > 5000)
-                        Log.Write("interrupt", "dpc-elevated", $"total={total}");
+                        Log.Write("interrupt", "dpc-elevated", "total=" + total);
                 }
 
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // process engine 2.0
-    //
-    // WMI watchers for start and stop events on all known game executables
-    // on start: apply game profile (priority, working set lock, mmcss, affinity)
-    // on stop: revert everything
-    // exponential backoff reconnect if WMI drops
-    // dwm boosted while any game is running
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     class ProcessEngine : IEngine
     {
-        public string   Name          => "process";
-        public DateTime LastHeartbeat { get; private set; } = DateTime.UtcNow;
+        public string Name { get { return "process"; } }
+
+        private DateTime _lastHeartbeat = DateTime.UtcNow;
+        public DateTime LastHeartbeat   { get { return _lastHeartbeat; } }
 
         System.Management.ManagementEventWatcher _startW;
         System.Management.ManagementEventWatcher _stopW;
 
-        readonly Dictionary<int, GameProfiles.Profile> _active = new Dictionary<int, GameProfiles.Profile>();
+        readonly Dictionary<int, GameProfiles.Profile> _active =
+            new Dictionary<int, GameProfiles.Profile>();
         readonly object _lock = new object();
 
         int _retry;
@@ -826,7 +823,7 @@ namespace AlbusCore
         {
             Connect();
             Log.Write("process", "started",
-                $"watching={string.Join(",", GameProfiles.AllExecutables())}");
+                "watching=" + string.Join(",", GameProfiles.AllExecutables()));
         }
 
         public void Stop()
@@ -843,13 +840,13 @@ namespace AlbusCore
                     "\" OR TargetInstance.Name=\"",
                     GameProfiles.AllExecutables());
 
-                string sq = $"SELECT * FROM __InstanceCreationEvent WITHIN 0.5 " +
-                            $"WHERE TargetInstance ISA \"Win32_Process\" " +
-                            $"AND (TargetInstance.Name=\"{exes}\")";
+                string sq = "SELECT * FROM __InstanceCreationEvent WITHIN 0.5 " +
+                            "WHERE TargetInstance ISA \"Win32_Process\" " +
+                            "AND (TargetInstance.Name=\"" + exes + "\")";
 
-                string eq = $"SELECT * FROM __InstanceDeletionEvent WITHIN 0.5 " +
-                            $"WHERE TargetInstance ISA \"Win32_Process\" " +
-                            $"AND (TargetInstance.Name=\"{exes}\")";
+                string eq = "SELECT * FROM __InstanceDeletionEvent WITHIN 0.5 " +
+                            "WHERE TargetInstance ISA \"Win32_Process\" " +
+                            "AND (TargetInstance.Name=\"" + exes + "\")";
 
                 _startW = new System.Management.ManagementEventWatcher(sq);
                 _stopW  = new System.Management.ManagementEventWatcher(eq);
@@ -872,8 +869,8 @@ namespace AlbusCore
 
         void Disconnect()
         {
-            try { _startW?.Stop(); _startW?.Dispose(); } catch { }
-            try { _stopW?.Stop();  _stopW?.Dispose();  } catch { }
+            try { if (_startW != null) { _startW.Stop(); _startW.Dispose(); } } catch { }
+            try { if (_stopW  != null) { _stopW.Stop();  _stopW.Dispose();  } } catch { }
         }
 
         void OnDrop(object s, System.Management.StoppedEventArgs e)
@@ -885,10 +882,10 @@ namespace AlbusCore
         void Reconnect()
         {
             if (_retry >= MAX_RETRY) { Log.Write("process", "wmi-gave-up"); return; }
-            int delay = Math.Min(3000 * (1 << _retry), 60000); // 3s → 60s max
+            int delay = Math.Min(3000 * (1 << _retry), 60000);
             _retry++;
-            new Timer(_ => { Disconnect(); Connect(); }, null, delay, Timeout.Infinite);
-            Log.Write("process", "wmi-reconnect", $"delay={delay}ms attempt={_retry}");
+            new Timer(delegate(object state) { Disconnect(); Connect(); }, null, delay, Timeout.Infinite);
+            Log.Write("process", "wmi-reconnect", "delay=" + delay + "ms attempt=" + _retry);
         }
 
         void OnProcessStart(object s, System.Management.EventArrivedEventArgs e)
@@ -901,9 +898,9 @@ namespace AlbusCore
                 var profile = GameProfiles.Resolve(name);
                 if (profile == null) return;
 
-                Thread.Sleep(1500); // let game initialize before touching it
+                Thread.Sleep(1500);
                 Apply((int)pid, profile);
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
@@ -915,7 +912,7 @@ namespace AlbusCore
                 var proc = (System.Management.ManagementBaseObject)e.NewEvent["TargetInstance"];
                 uint pid = (uint)proc["ProcessId"];
                 Revert((int)pid);
-                LastHeartbeat = DateTime.UtcNow;
+                _lastHeartbeat = DateTime.UtcNow;
             }
             catch { }
         }
@@ -943,7 +940,6 @@ namespace AlbusCore
                     proc.ProcessorAffinity = (IntPtr)mask;
                 }
 
-                // dwm high, explorer below normal while game runs
                 foreach (var d in Process.GetProcessesByName("dwm"))
                     try { d.PriorityClass = ProcessPriorityClass.High; } catch { }
                 foreach (var exp in Process.GetProcessesByName("explorer"))
@@ -952,9 +948,11 @@ namespace AlbusCore
                 lock (_lock) { _active[pid] = p; }
 
                 Log.Write("process", "game-start",
-                    $"game={p.Name} pid={pid} boost={p.BoostPriority} " +
-                    $"ws-lock={p.LockWorkingSet} mmcss={p.MmcssInject} " +
-                    $"affinity-isolated={p.AffinityIsolateFromCore >= 0}");
+                    "game=" + p.Name + " pid=" + pid +
+                    " boost=" + p.BoostPriority +
+                    " ws-lock=" + p.LockWorkingSet +
+                    " mmcss=" + p.MmcssInject +
+                    " affinity-isolated=" + (p.AffinityIsolateFromCore >= 0));
             }
             catch (Exception ex) { Log.Write("process", "apply-failed", ex.Message); }
         }
@@ -979,13 +977,13 @@ namespace AlbusCore
                     try { exp.PriorityClass = ProcessPriorityClass.Normal; } catch { }
             }
 
-            Log.Write("process", "game-exit", $"game={p.Name} pid={pid}");
+            Log.Write("process", "game-exit", "game=" + p.Name + " pid=" + pid);
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // native methods
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     static class NativeMethods
     {
@@ -1057,9 +1055,9 @@ namespace AlbusCore
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // com interfaces
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     [ComImport][Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -1141,9 +1139,9 @@ namespace AlbusCore
         public ushort cbSize;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
     // installer
-    // ─────────────────────────────────────────────────────────────────────────
+    // —————————————————————————————————————————————————————————————————————————
 
     [RunInstaller(true)]
     public class AlbusInstaller : Installer
