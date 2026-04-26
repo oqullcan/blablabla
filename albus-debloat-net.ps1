@@ -303,26 +303,30 @@ foreach ($Feat in (Get-WindowsOptionalFeature -Online -ErrorAction SilentlyConti
 }
 
 
-# 8. remove ai & copilot packages (dism operations - slowest, last)
+# 8. remove ai & copilot packages (winsxs - owners bypass + cmdlet)
 Write-Host "`nPurging AI & Copilot Packages..." -ForegroundColor Cyan
 
 try {
     $PkgKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages", $true)
     if ($PkgKey) {
         foreach ($Sub in $PkgKey.GetSubKeyNames()) {
-            if ($Sub -match "(?i)(Copilot|MachineLearning|Windows-AI-|Recall)") {
+            if ($Sub -match "(?i)(Copilot|MachineLearning|Windows-AI-|Windows\.Copilot|ShellAI|Recall)") {
                 $SubKey = $PkgKey.OpenSubKey($Sub, $true)
-                if ($SubKey) { $SubKey.SetValue("Visibility", 1, [Microsoft.Win32.RegistryValueKind]::DWord) }
-                Invoke-SilentProcess "dism.exe" "/online /Remove-Package /PackageName:$Sub /quiet /norestart"
+                if ($SubKey) {
+                    $SubKey.SetValue("Visibility", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+                    try { $SubKey.DeleteSubKeyTree("Owners", $false) } catch {}
+                }
+                try { Remove-WindowsPackage -Online -PackageName $Sub -NoRestart -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null } catch {}
             }
         }
     }
 } catch {}
 
 
-# finish
+# finish - graceful explorer restart
 Write-Host "`nRestarting Explorer..." -ForegroundColor Cyan
-foreach ($P in [System.Diagnostics.Process]::GetProcessesByName("explorer")) { try { $P.Kill() } catch {} }
-try { [System.Diagnostics.Process]::Start("explorer.exe") | Out-Null } catch {}
+Stop-Process -Name Explorer -Force -ErrorAction SilentlyContinue
+[System.Threading.Thread]::Sleep(2000)
+[System.Diagnostics.Process]::Start("Explorer.exe") | Out-Null
 
 Write-Host "`nDebloat completed successfully." -ForegroundColor Green
