@@ -1184,13 +1184,12 @@ $ServiceConfig = @(
 
 foreach ($S in $ServiceConfig) {
     if (Get-Service -Name $S.Name -ErrorAction SilentlyContinue) {
-        # Stop-Service -Name $S.Name -Force -ErrorAction SilentlyContinue
-        $type = switch ($S.Start) { 2 { "Automatic" } 3 { "Manual" } 4 { "Disabled" } }
-        Set-Service -Name $S.Name -StartupType $type -ErrorAction SilentlyContinue
+        sc.exe stop $S.Name >$NULL 2>&1
+        $type = switch ($S.Start) { 2 { "auto" } 3 { "demand" } 4 { "disabled" } }
+        sc.exe config $S.Name start= $type >$NULL 2>&1
         Set-Registry -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$($S.Name)" -Name "Start" -Value $S.Start -Type "DWord"
     }
 }
-
 Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services" -ErrorAction SilentlyContinue | ForEach-Object {
     try {
         $img = (Get-ItemProperty -Path $_.PSPath -Name "ImagePath" -ErrorAction SilentlyContinue).ImagePath
