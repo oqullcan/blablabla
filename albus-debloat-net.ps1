@@ -108,6 +108,12 @@ try {
     }
 } catch {}
 
+# prevent windows from re-creating removed scheduled tasks via group policy
+[Microsoft.Win32.Registry]::SetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\ScheduledDiagnostics", "EnabledExecution", 0, [Microsoft.Win32.RegistryValueKind]::DWord)
+[Microsoft.Win32.Registry]::SetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\CloudContent", "DisableWindowsConsumerFeatures", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+[Microsoft.Win32.Registry]::SetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\CloudContent", "DisableSoftLanding", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+[Microsoft.Win32.Registry]::SetValue("HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoInstrumentation", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+
 
 # 3. remove microsoft edge
 Write-Host "`nPurging Microsoft Edge..." -ForegroundColor Cyan
@@ -151,17 +157,51 @@ if (-not [System.IO.Directory]::Exists($EdgeAppPath)) { [System.IO.Directory]::C
 $SpoofExe = [System.IO.Path]::Combine($EdgeAppPath, "MicrosoftEdge.exe")
 if (-not [System.IO.File]::Exists($SpoofExe)) { [System.IO.File]::Create($SpoofExe).Close() }
 
-# invoke edge uninstaller
+# invoke edge uninstaller with windir spoof (advanced bypass)
+$OldWinDir = [Environment]::GetEnvironmentVariable("windir")
 try {
-    $EdgeKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge")
-    if ($EdgeKey) {
-        $UninstallString = $EdgeKey.GetValue("UninstallString")
-        if ($UninstallString) {
-            $UninstallString += " --force-uninstall --delete-profile"
-            Invoke-SilentProcess "cmd.exe" "/c $UninstallString"
+    [Environment]::SetEnvironmentVariable("windir", "")
+
+    $EdgeClientState = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}")
+    $UninstallString = $null
+    $UninstallArgs = $null
+    if ($EdgeClientState) {
+        $UninstallString = $EdgeClientState.GetValue("UninstallString")
+        $UninstallArgs = $EdgeClientState.GetValue("UninstallArguments")
+    }
+
+    # fallback to standard uninstall key
+    if (-not $UninstallString) {
+        $EdgeKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge")
+        if ($EdgeKey) { $UninstallString = $EdgeKey.GetValue("UninstallString") }
+    }
+
+    if ($UninstallString -and [System.IO.File]::Exists($UninstallString)) {
+        if (-not $UninstallArgs) { $UninstallArgs = "" }
+        $UninstallArgs += " --force-uninstall --delete-profile"
+
+        # spoof parent process as immersive control panel
+        $SpoofDir = [System.IO.Path]::Combine([Environment]::GetEnvironmentVariable("SystemRoot"), "ImmersiveControlPanel")
+        if (-not [System.IO.Directory]::Exists($SpoofDir)) { [System.IO.Directory]::CreateDirectory($SpoofDir) | Out-Null }
+        $SpoofCmd = [System.IO.Path]::Combine($SpoofDir, "sihost.exe")
+        $CmdExe = [System.IO.Path]::Combine([Environment]::GetEnvironmentVariable("SystemRoot"), "System32", "cmd.exe")
+        try {
+            [System.IO.File]::Copy($CmdExe, $SpoofCmd, $true)
+            $PSI = [System.Diagnostics.ProcessStartInfo]::new()
+            $PSI.FileName = $SpoofCmd
+            $PSI.Arguments = "/c `"$UninstallString`" $UninstallArgs"
+            $PSI.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            $PSI.CreateNoWindow = $true
+            $PSI.UseShellExecute = $false
+            $Proc = [System.Diagnostics.Process]::Start($PSI)
+            if ($null -ne $Proc) { $Proc.WaitForExit() }
+        } finally {
+            if ([System.IO.File]::Exists($SpoofCmd)) { [System.IO.File]::Delete($SpoofCmd) }
         }
     }
-} catch {}
+} finally {
+    [Environment]::SetEnvironmentVariable("windir", $OldWinDir)
+}
 
 # clean edge leftover files
 if ([System.IO.Directory]::Exists($EdgeAppPath)) { try { [System.IO.Directory]::Delete($EdgeAppPath, $true) } catch {} }
@@ -192,16 +232,18 @@ $EdgeUpdateFolder = [System.IO.Path]::Combine($Prog86, "Microsoft", "EdgeUpdate"
 if ([System.IO.Directory]::Exists($EdgeFolder)) { try { [System.IO.Directory]::Delete($EdgeFolder, $true) } catch {} }
 if ([System.IO.Directory]::Exists($EdgeUpdateFolder)) { try { [System.IO.Directory]::Delete($EdgeUpdateFolder, $true) } catch {} }
 
-# edge legacy cbs package (windows 10)
+# edge legacy cbs package (windows 10) - owners bypass + cmdlet
 try {
     $CBSKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages", $true)
     if ($CBSKey) {
         foreach ($Sub in $CBSKey.GetSubKeyNames()) {
             if ($Sub -like "*Microsoft-Windows-Internet-Browser-Package*~~*") {
                 $PkgKey = $CBSKey.OpenSubKey($Sub, $true)
-                if ($PkgKey) { $PkgKey.SetValue("Visibility", 1, [Microsoft.Win32.RegistryValueKind]::DWord) }
-                try { $CBSKey.OpenSubKey($Sub, $true).DeleteSubKeyTree("Owners", $false) } catch {}
-                Invoke-SilentProcess "dism.exe" "/online /Remove-Package /PackageName:$Sub /quiet /norestart"
+                if ($PkgKey) {
+                    $PkgKey.SetValue("Visibility", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+                    try { $PkgKey.DeleteSubKeyTree("Owners", $false) } catch {}
+                }
+                try { Remove-WindowsPackage -Online -PackageName $Sub -NoRestart -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null } catch {}
             }
         }
     }
@@ -270,13 +312,20 @@ try { [Microsoft.Win32.Registry]::LocalMachine.DeleteSubKeyTree("SYSTEM\ControlS
 try { Unregister-ScheduledTask -TaskName PLUGScheduler -Confirm:$false -ErrorAction Stop | Out-Null } catch {}
 
 
-# 5. remove uwp apps
+# 5. remove uwp apps + provisioned packages (prevent reinstall on new users)
 Write-Host "`nPurging UWP Apps..." -ForegroundColor Cyan
 
 $UwpRegex = "(?i)^(" + (($UwpAppExclusions | ForEach-Object { [Regex]::Escape($_).Replace('\*', '.*') }) -join '|') + ")$"
 foreach ($App in (Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)) {
     if ($App.Name -notmatch $UwpRegex) {
         try { Remove-AppxPackage -Package $App.PackageFullName -AllUsers -ErrorAction Stop | Out-Null } catch {}
+    }
+}
+
+# remove provisioned packages so apps don't come back for new user profiles
+foreach ($Pkg in (Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)) {
+    if ($Pkg.DisplayName -notmatch $UwpRegex) {
+        try { Remove-AppxProvisionedPackage -Online -PackageName $Pkg.PackageName -ErrorAction Stop | Out-Null } catch {}
     }
 }
 
