@@ -26,20 +26,15 @@ $ALBUS_DIR     = 'C:\Albus'
 $ALBUS_LOG     = "$ALBUS_DIR\albus.log"
 $ALBUS_VERSION = '3.0'
 $TODAY         = Get-Date
-$PAUSE_END     = $TODAY.AddYears(31)
-$TODAY_STR     = $TODAY.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-$PAUSE_STR     = $PAUSE_END.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-# Resolve active user SID (handles running-as-admin from another user)
 $script:ActiveSID = $null
 try {
-    $explorer = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue |
-                Select-Object -First 1
+    $explorer = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($explorer) { $script:ActiveSID = (Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid).Sid }
 } catch { }
 
-$HKCU_ROOT = if ($script:ActiveSID) { "HKEY_USERS\$script:ActiveSID" }    else { "HKEY_CURRENT_USER" }
-$HKCU_PS   = if ($script:ActiveSID) { "Registry::HKEY_USERS\$script:ActiveSID" } else { "HKCU:" }
+$HKCU_ROOT = if ($script:ActiveSID) { "HKEY_USERS\$script:ActiveSID" } else { "HKEY_CURRENT_USER" }
+$HKCU_PS = if ($script:ActiveSID) { "Registry::HKEY_USERS\$script:ActiveSID" } else { "HKCU:" }
 
 # ── logging & ui ──────────────────────────────────────
 
@@ -239,8 +234,8 @@ function Test-Network {
 }
 
 function Get-GitHubRelease {
-    param([string]$Repo)
-    return (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -ErrorAction Stop)
+    param([string]$repo)
+    return (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -ErrorAction Stop)
 }
 
 function Get-File {
@@ -296,7 +291,7 @@ Write-Done 'system preparation'
 #  later phases execute (sequential here, could be parallelized
 #  in a future version with powershell jobs).
 # ════════════════════════════════════════════════════════════
-<#
+
 Write-Phase 'software installation'
 
 if (Test-Network) {
@@ -356,7 +351,6 @@ if (Test-Network) {
 }
 
 Write-Done 'software installation'
-#>
 
 # ════════════════════════════════════════════════════════════
 #  PHASE 14 · GPU DRIVER  (interactive)
@@ -377,7 +371,7 @@ Write-Phase 'nvidia driver setup'
     $ZipExe = 'C:\Program Files\7-Zip\7z.exe'
     if (-not (Test-Path $ZipExe)) { Write-Step '7-zip not found' 'fail'; return }
 
-    $ExtractPath = "$env:SystemRoot\Temp\NVIDIA"
+    $ExtractPath = "$ALBUS_DIR\NVIDIA"
     if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
 
     Write-Step 'extracting & debloating'
@@ -413,8 +407,8 @@ Write-Phase 'nvidia driver setup'
     if (Test-Path $DRSPath) { Get-ChildItem -Path $DRSPath -Recurse | Unblock-File -ErrorAction SilentlyContinue }
 
     Write-Step 'fetching & applying profile inspector'
-    $InspectorZip = "$env:SystemRoot\Temp\nvidiaProfileInspector.zip"
-    $ExtractDir   = "$env:SystemRoot\Temp\nvidiaProfileInspector"
+    $InspectorZip = "$ALBUS_DIR\nvidiaProfileInspector.zip"
+    $ExtractDir   = "$ALBUS_DIR\Temp\nvidiaProfileInspector"
 
     try {
         $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest" -ErrorAction Stop
@@ -464,7 +458,7 @@ Write-Phase 'nvidia driver setup'
   </Profile>
 </ArrayOfProfile>
 "@
-    $NIPPath = "$env:SystemRoot\Temp\inspector.nip"
+    $NIPPath = "$ALBUS_DIR\inspector.nip"
     $NIPFile | Set-Content $NIPPath -Force
 
     if (Test-Path $ExtractDir) {
@@ -492,7 +486,7 @@ function AMD {
     $ZipExe = 'C:\Program Files\7-Zip\7z.exe'
     if (-not (Test-Path $ZipExe)) { Write-Step '7-zip not found' 'fail'; return }
 
-    $ExtractPath = "$env:SystemRoot\Temp\amddriver"
+    $ExtractPath = "$ALBUS_DIR\AMD"
     if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
 
     Write-Step 'extracting & patching'
@@ -614,582 +608,35 @@ switch -regex ($selection) {
     }
 }
 
-# ════════════════════════════════════════════════════════════
-#  phase 3 · registry tweaks  (converted from AME Wizard YAML)
-# ════════════════════════════════════════════════════════════
+# ── phase 1 - registry tweaks ───────────────────────────────────────────────
 Write-Phase 'registry tweaks'
 
-# ── 3.1  context menu ───────────────────────────────────────
-Write-Step 'context menu'
-Apply-Tweaks @(
-    # Classic right-click context menu (Windows 11)
-    @{ Path = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'; Name = ''; Value = ''; Type = 'String' }
-)
-
-# ── 3.2  control panel ──────────────────────────────────────
-Write-Step 'control panel'
-Apply-Tweaks @(
-    # Disable JPEG wallpaper compression
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'JPEGImportQuality'; Value = 100;    Type = 'DWord' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'JPEGImportQuality'; Value = 100;    Type = 'DWord' }
-
-    # Disable system beeps
-    @{ Path = 'HKCU:\Control Panel\Sound';            Name = 'Beep'; Value = 'no'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Sound';    Name = 'Beep'; Value = 'no'; Type = 'String' }
-
-    # Instant Start Menu popup
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'MenuShowDelay'; Value = '0'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'MenuShowDelay'; Value = '0'; Type = 'String' }
-
-    # Active window track timeout (10 ms)
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'ActiveWndTrkTimeout'; Value = 10; Type = 'DWord' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'ActiveWndTrkTimeout'; Value = 10; Type = 'DWord' }
-
-    # Auto-end tasks on shutdown
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'AutoEndTasks'; Value = '1'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'AutoEndTasks'; Value = '1'; Type = 'String' }
-
-    # Hung app timeout (2 s)
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'HungAppTimeout'; Value = '2000'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'HungAppTimeout'; Value = '2000'; Type = 'String' }
-
-    # Wait-to-kill app timeout (2 s)
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'WaitToKillAppTimeout'; Value = '2000'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'WaitToKillAppTimeout'; Value = '2000'; Type = 'String' }
-
-    # Low-level hooks timeout (1 s)
-    @{ Path = 'HKCU:\Control Panel\Desktop';          Name = 'LowLevelHooksTimeout'; Value = '1000'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop';  Name = 'LowLevelHooksTimeout'; Value = '1000'; Type = 'String' }
-
-    # MouseKeys sensitivity purge (delete)
-    @{ Path = 'HKCU:\Control Panel\Accessibility\MouseKeys';          Name = 'MaximumSpeed';      Value = '-' }
-    @{ Path = 'HKCU:\Control Panel\Accessibility\MouseKeys';          Name = 'TimeToMaximumSpeed'; Value = '-' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Accessibility\MouseKeys';  Name = 'MaximumSpeed';      Value = '-' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Accessibility\MouseKeys';  Name = 'TimeToMaximumSpeed'; Value = '-' }
-
-    # Disable Enhance Pointer Precision
-    @{ Path = 'HKCU:\Control Panel\Mouse';            Name = 'MouseSpeed';      Value = '0'; Type = 'String' }
-    @{ Path = 'HKCU:\Control Panel\Mouse';            Name = 'MouseThreshold1'; Value = '0'; Type = 'String' }
-    @{ Path = 'HKCU:\Control Panel\Mouse';            Name = 'MouseThreshold2'; Value = '0'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse';    Name = 'MouseSpeed';      Value = '0'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse';    Name = 'MouseThreshold1'; Value = '0'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse';    Name = 'MouseThreshold2'; Value = '0'; Type = 'String' }
-
-    # Disable Online Tips
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'AllowOnlineTips'; Value = 0 }
-)
-
-# ── 3.3  ease of access purge ───────────────────────────────
-Write-Step 'ease of access purge'
-$AccHives = @(
-    'AudioDescription', 'Blind Access', 'HighContrast',
-    'Keyboard Preference', 'Keyboard Response', 'MouseKeys',
-    'On', 'ShowSounds', 'SlateLaunch', 'SoundSentry',
-    'StickyKeys', 'TimeOut', 'ToggleKeys'
-)
-foreach ($h in $AccHives) {
-    Set-Reg -Path "HKCU:\Control Panel\Accessibility\$h"         -Name 'Flags' -Value '0' -Type 'String'
-    Set-Reg -Path "HKU:\.DEFAULT\Control Panel\Accessibility\$h" -Name 'Flags' -Value '0' -Type 'String'
-}
-
-# ── 3.4  explorer & performance ─────────────────────────────
-Write-Step 'explorer performance'
-Apply-Tweaks @(
-    # Disable Automatic Folder Type Discovery
-    @{ Path = 'HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell';         Name = 'FolderType'; Value = 'NotSpecified'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell'; Name = 'FolderType'; Value = 'NotSpecified'; Type = 'String' }
-
-    # Force Explorer to use high-performance GPU
-    @{ Path = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences';         Name = 'C:\Windows\explorer.exe'; Value = 'GpuPreference=2;'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\DirectX\UserGpuPreferences'; Name = 'C:\Windows\explorer.exe'; Value = 'GpuPreference=2;'; Type = 'String' }
-
-    # Disable OneDrive account-based insights in File Explorer
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'DisableGraphRecentItems'; Value = 1 }
-
-    # Hide Spotlight icon on Desktop (24H2)
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel'; Name = '{2cc5ca98-6485-489a-920e-b3e88a6ccce3}'; Value = 1 }
-
-    # Increased context menu selection threshold
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer';         Name = 'MultipleInvokePromptMinimum'; Value = 100 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer'; Name = 'MultipleInvokePromptMinimum'; Value = 100 }
-
-    # Disable '- Shortcut' text on shortcut creation
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer';         Name = 'link'; Value = ([byte[]](0x00,0x00,0x00,0x00)); Type = 'Binary' }
-    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer'; Name = 'link'; Value = ([byte[]](0x00,0x00,0x00,0x00)); Type = 'Binary' }
-
-    # Always show more details in file copy dialog
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager';         Name = 'EnthusiastMode'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager'; Name = 'EnthusiastMode'; Value = 1 }
-
-    # Disable AutoPlay
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers';         Name = 'DisableAutoplay'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers'; Name = 'DisableAutoplay'; Value = 1 }
-
-    # Disable AutoRun on all drives
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoDriveTypeAutoRun'; Value = 255 }
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoDriveTypeAutoRun'; Value = 255 }
-
-    # Disable low disk space check
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'NoLowDiskSpaceChecks'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoLowDiskSpaceChecks'; Value = 1 }
-
-    # Service shutdown timeout (1.5 s)
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control'; Name = 'WaitToKillServiceTimeout'; Value = '1500'; Type = 'String' }
-
-    # Do not track Shell shortcuts during roaming
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'LinkResolveIgnoreLinkInfo'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'LinkResolveIgnoreLinkInfo'; Value = 1 }
-)
-
-# Downloads folder — disable Group By
-$DownloadsID = '{885a186e-a440-4ada-812b-db871b942259}'
-Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\$DownloadsID" -Recurse -EA 0 |
-    ForEach-Object {
-        if ((Get-ItemProperty $_.PSPath -EA 0).GroupBy) {
-            Set-ItemProperty -Path $_.PSPath -Name GroupBy -Value '' -EA 0
-        }
-    }
-# refresh Bags for current user
-$bagsPath = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags'
-Get-ChildItem -Path $bagsPath -EA 0 | ForEach-Object {
-    $fullPath = Join-Path $_.PSPath "Shell\$DownloadsID"
-    if (Test-Path $fullPath) { Remove-Item -Path $fullPath -Recurse -EA 0 }
-}
-
-# ── 3.5  taskbar & start menu ───────────────────────────────
-Write-Step 'taskbar & shell'
-Apply-Tweaks @(
-    # Disable Taskbar Animations
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAnimations'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAnimations'; Value = 0 }
-
-    # Windows Ink Workspace — on but no suggested apps
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace'; Name = 'AllowWindowsInkWorkspace';              Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace'; Name = 'AllowSuggestedAppsInWindowsInkWorkspace'; Value = 0 }
-
-    # Disable Start recommendations / iris / account notifications
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'Start_IrisRecommendations'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'Start_IrisRecommendations'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'Start_AccountNotifications'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'Start_AccountNotifications'; Value = 0 }
-
-    # Enable 'End Task' in taskbar right-click
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings';         Name = 'TaskbarEndTask'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings'; Name = 'TaskbarEndTask'; Value = 1 }
-
-    # Open File Explorer to This PC
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'LaunchTo'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'LaunchTo'; Value = 1 }
-
-    # Hide pop-up descriptions (tooltips)
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowInfoTip'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowInfoTip'; Value = 0 }
-
-    # Balloon / tray notifications
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'NoBalloonFeatureAdvertisements'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'NoBalloonFeatureAdvertisements'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'NoAutoTrayNotify'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'NoAutoTrayNotify'; Value = 1 }
-
-    # Push / cloud notifications
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications'; Name = 'NoCloudApplicationNotification'; Value = 1 }
-
-    # Windows Update notification level — silent
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\WindowsUpdate'; Name = 'UpdateNotificationLevel'; Value = 2 }
-
-    # OOBE / "Let's finish setting up" nag
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement';         Name = 'ScoobeSystemSettingEnabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'; Name = 'ScoobeSystemSettingEnabled'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Context\CloudExperienceHostIntent\Wireless';         Name = 'ScoobeCheckCompleted'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Context\CloudExperienceHostIntent\Wireless'; Name = 'ScoobeCheckCompleted'; Value = 1 }
-
-    # Show Search Icon (icon only, not box)
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'SearchboxTaskbarMode'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; Value = 1 }
-
-    # Hide Task View button
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowTaskViewButton'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowTaskViewButton'; Value = 0 }
-
-    # Disable News & Interests / Widgets
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'; Name = 'EnableFeeds'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh';                  Name = 'AllowNewsAndInterests'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds';         Name = 'ShellFeedsTaskbarViewMode'; Value = 2 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Feeds'; Name = 'ShellFeedsTaskbarViewMode'; Value = 2 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarDa'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarDa'; Value = 0 }
-
-    # Remove People Bar
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'HidePeopleBar'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'HidePeopleBar'; Value = 1 }
-
-    # Remove Meet Now icon
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'HideSCAMeetNow'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'HideSCAMeetNow'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'HideSCAMeetNow'; Value = 1 }
-
-    # Disable Chat (Teams) icon
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat'; Name = 'ChatIcon'; Value = 3 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarMn'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarMn'; Value = 0 }
-)
-
-# ── 3.6  search & indexing ──────────────────────────────────
-Write-Step 'search performance'
-Apply-Tweaks @(
-    # Respect power modes when indexing
-    @{ Path = 'HKLM:\Software\Microsoft\Windows Search\Gather\Windows\SystemIndex'; Name = 'RespectPowerModes'; Value = 1 }
-
-    # Prevent indexing on battery
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'PreventIndexOnBattery'; Value = 1 }
-
-    # Disable search box suggestions
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'DisableSearchBoxSuggestions'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions'; Value = 1 }
-
-    # Cloud search — user selected
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCloudSearch'; Value = 2 }
-
-    # Cortana above lock screen — disabled
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCortanaAboveLock'; Value = 0 }
-
-    # Allow Cortana (kept enabled as per YAML)
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCortana'; Value = 1 }
-
-    # Cortana in AAD / OOBE — disabled
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCortanaInAAD';          Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCortanaInAADPathOOBE';  Value = 0 }
-
-    # No location in Search
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowSearchToUseLocation'; Value = 0 }
-
-    # Disable web results in Search
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'ConnectedSearchUseWeb';                     Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'ConnectedSearchUseWebOverMeteredConnections'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'DisableWebSearch';                           Value = 1 }
-
-    # Search privacy — anonymous
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'ConnectedSearchPrivacy'; Value = 3 }
-
-    # Disable Bing / Cortana consent
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'CortanaConsent';    Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'CortanaConsent';    Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'BingSearchEnabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'BingSearchEnabled'; Value = 0 }
-
-    # Cortana on lock screen voice activation — disabled
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Speech_OneCore\Preferences'; Name = 'VoiceActivationEnableAboveLockscreen'; Value = 0 }
-
-    # Disable Store results in Search (25H2)
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\WinStore.Tasks.WindowsSearchTask'; Name = 'ActivationType'; Value = 4294967295 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\WinStore.Tasks.WindowsSearchTask'; Name = 'Server';         Value = ''; Type = 'String' }
-
-    # Prevent WebView2 from SearchHost
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Policies\Microsoft\FeatureManagement\Overrides'; Name = '1694661260'; Value = 0 }
-)
-
-# ── 3.7  explorer view ──────────────────────────────────────
-Write-Step 'explorer view'
-Apply-Tweaks @(
-    # Show full path in title bar
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState';         Name = 'FullPath'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState'; Name = 'FullPath'; Value = 1 }
-
-    # Show file extensions (security)
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'HideFileExt'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'HideFileExt'; Value = 0 }
-
-    # Disable sync provider notifications (OneDrive ads)
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowSyncProviderNotifications'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowSyncProviderNotifications'; Value = 0 }
-)
-
-# ── 3.8  start menu pins & folders ─────────────────────────
-Write-Step 'start menu'
-$Pins = '{"pinnedList":[{"packagedAppId":"Microsoft.WindowsStore_8wekyb3d8bbwe!App"},{"packagedAppId":"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"},{"packagedAppId":"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"},{"packagedAppId":"Microsoft.Paint_8wekyb3d8bbwe!App"},{"desktopAppLink":"%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\File Explorer.lnk"},{"packagedAppId":"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}]}'
-Apply-Tweaks @(
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'ConfigureStartPins'; Value = $Pins; Type = 'String' }
-
-    # Start folder shortcuts — all hidden, Settings shown
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDocuments';          Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDocuments_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDownloads';          Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDownloads_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderFileExplorer';       Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderFileExplorer_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderHomeGroup';          Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderHomeGroup_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderMusic';              Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderMusic_ProviderSet';  Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderNetwork';            Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderNetwork_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPersonalFolder';     Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPersonalFolder_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPictures';           Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPictures_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderSettings';           Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderSettings_ProviderSet'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderVideos';             Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderVideos_ProviderSet'; Value = 0 }
-
-    # Do not use search when resolving shell shortcuts
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'NoResolveSearch'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoResolveSearch'; Value = 1 }
-)
-
-# ── 3.9  windows settings (system/privacy/devices) ─────────
-Write-Step 'windows settings'
-Apply-Tweaks @(
-    # Hide Insider page from Windows Update
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsSelfHost\UI\Visibility'; Name = 'HideInsiderPage'; Value = 1 }
-
-    # Hide Windows Update tray icon
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'TrayIconVisibility'; Value = 0 }
-
-    # Tablet mode — always desktop
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'SignInMode';                      Value = 1 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'TabletMode';                      Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'ConvertibleSlateModePromptPreference'; Value = 2 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'SignInMode';                      Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'TabletMode';                      Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'ConvertibleSlateModePromptPreference'; Value = 2 }
-
-    # Taskbar in tablet mode — show apps, don't auto-hide
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAppsVisibleInTabletMode'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAppsVisibleInTabletMode'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAutoHideInTabletMode';    Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAutoHideInTabletMode';    Value = 0 }
-
-    # Timeline suggestions — off
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SubscribedContent-353698Enabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353698Enabled'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SystemPaneSuggestionsEnabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SystemPaneSuggestionsEnabled'; Value = 0 }
-
-    # Clipboard history — off
-    @{ Path = 'HKCU:\Software\Microsoft\Clipboard';         Name = 'EnableClipboardHistory'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Clipboard'; Name = 'EnableClipboardHistory'; Value = 0 }
-
-    # Allow clipboard (policy stays enabled so clipboard works)
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'AllowClipboardHistory';      Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'AllowCrossDeviceClipboard';  Value = 1 }
-
-    # Typing / autocorrect — all off
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableAutocorrection';         Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableAutocorrection';         Value = 0 }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableSpellchecking';          Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableSpellchecking';          Value = 0 }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableTextPrediction';         Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableTextPrediction';         Value = 0 }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnablePredictionSpaceInsertion'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnablePredictionSpaceInsertion'; Value = 0 }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableDoubleTapSpace';         Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7'; Name = 'EnableDoubleTapSpace';         Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'InsightsEnabled';             Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'InsightsEnabled';             Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'EnableHwkbTextPrediction';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'EnableHwkbTextPrediction';    Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'EnableHwkbAutocorrection';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'EnableHwkbAutocorrection';    Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'MultilingualEnabled';         Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'MultilingualEnabled';         Value = 0 }
-
-    # Start suggestions — off
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SubscribedContent-338388Enabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-338388Enabled'; Value = 0 }
-
-    # Offline Maps — no auto-update, WiFi only
-    @{ Path = 'HKLM:\SYSTEM\Maps'; Name = 'UpdateOnlyOnWifi';  Value = 1 }
-    @{ Path = 'HKLM:\SYSTEM\Maps'; Name = 'AutoUpdateEnabled'; Value = 0 }
-
-    # Settings sync — all disabled
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableApplicationSettingSync';            Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableApplicationSettingSyncUserOverride'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSync';                       Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSyncUserOverride';            Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWebBrowserSettingSync';              Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWebBrowserSettingSyncUserOverride';  Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableDesktopThemeSettingSync';            Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableDesktopThemeSettingSyncUserOverride'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSyncOnPaidNetwork';                  Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWindowsSettingSync';                 Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWindowsSettingSyncUserOverride';     Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableCredentialsSettingSync';             Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableCredentialsSettingSyncUserOverride'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisablePersonalizationSettingSync';         Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisablePersonalizationSettingSyncUserOverride'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableStartLayoutSettingSync';             Value = 2 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableStartLayoutSettingSyncUserOverride'; Value = 1 }
-
-    # Game DVR — disabled
-    @{ Path = 'HKCU:\System\GameConfigStore';         Name = 'GameDVR_Enabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 }
-
-    # Advertising ID — disabled
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Id';      Value = '-' }
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Id';      Value = '-' }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AdvertisingInfo';       Name = 'DisabledByGroupPolicy'; Value = 1 }
-
-    # Language list opt-out (website local content)
-    @{ Path = 'HKCU:\Control Panel\International\User Profile';         Name = 'HttpAcceptLanguageOptOut'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Control Panel\International\User Profile'; Name = 'HttpAcceptLanguageOptOut'; Value = 1 }
-
-    # Account notifications in Settings — off
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications';         Name = 'EnableAccountNotifications'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications'; Name = 'EnableAccountNotifications'; Value = 1 }
-
-    # Online speech recognition — off
-    @{ Path = 'HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy';         Name = 'HasAccepted'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy'; Name = 'HasAccepted'; Value = 0 }
-
-    # Inking & typing data collection — off
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\TextInput'; Name = 'AllowLinguisticDataCollection'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Input\TIPC'; Name = 'Enabled'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\TIPC'; Name = 'Enabled'; Value = 0 }
-
-    # Tailored experiences — off
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy';         Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Privacy'; Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\DevicePolicy\TailoredExperiencesWithDiagnosticDataEnabled'; Name = 'DefaultValue'; Value = 0 }
-
-    # Diagnostic event transcript — off
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Diagnostics\DiagTrack\EventTranscriptKey'; Name = 'EnableEventTranscript'; Value = 0 }
-
-    # Feedback frequency — never
-    @{ Path = 'HKCU:\Software\Microsoft\Siuf\Rules';         Name = 'NumberOfSIUFInPeriod'; Value = 0 }
-    @{ Path = 'HKCU:\Software\Microsoft\Siuf\Rules';         Name = 'PeriodInNanoSeconds'; Value = '-' }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Siuf\Rules'; Name = 'NumberOfSIUFInPeriod'; Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Siuf\Rules'; Name = 'PeriodInNanoSeconds'; Value = '-' }
-
-    # Activity history — all off
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'UploadUserActivities';  Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'PublishUserActivities'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'EnableActivityFeed';    Value = 0 }
-
-    # App permissions — deny
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location';                Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location';        Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam';                  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam';                  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone';              Name = 'Value'; Value = 'Allow'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone';              Name = 'Value'; Value = 'Allow'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\activity';                Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\activity';                Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userAccountInformation';  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userAccountInformation';  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\appointments';            Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\appointments';            Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userDataTasks';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userDataTasks';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\chat';                    Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\chat';                    Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\radios';                  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\radios';                  Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\bluetoothSync';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\bluetoothSync';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\appDiagnostics';          Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\appDiagnostics';          Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\documentsLibrary';        Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\documentsLibrary';        Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\picturesLibrary';         Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\picturesLibrary';         Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\videosLibrary';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\videosLibrary';           Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\broadFileSystemAccess';   Name = 'Value'; Value = 'Deny'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\broadFileSystemAccess';   Name = 'Value'; Value = 'Deny'; Type = 'String' }
-
-    # Wi-Fi Sense — disabled
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\config';   Name = 'AutoConnectAllowedOEM'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\features'; Name = 'PaidWifi';              Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\features'; Name = 'WiFiSenseOpen';         Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowWiFiHotSpotReporting';        Name = 'value'; Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowAutoConnectToWiFiSenseHotspots'; Name = 'value'; Value = 0 }
-
-    # Disable ValueBanners in Settings (requires TI)
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\ValueBanner.IdealStateFeatureControlProvider'; Name = 'ActivationType'; Value = 4294967295 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\ValueBanner.IdealStateFeatureControlProvider'; Name = 'Server';         Value = ''; Type = 'String' }
-
-    # Disable Recall / AI snapshots (24H2)
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 }
-
-    # Enable Sudo — Inline mode
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo'; Name = 'Enabled'; Value = 3 }
-)
-
-# ── 3.10  branding & OEM info ───────────────────────────────
-Write-Step 'branding & oem'
-Apply-Tweaks @(
-    # Edition sub-branding
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubManufacturer'; Value = 'Albus'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubstring';       Value = 'Albus';     Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubVersion';      Value = 'Albus 1.0';       Type = 'String' }
-
-    # OEM Information
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'HelpCustomized';  Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'Manufacturer';    Value = 'Albus';         Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportProvider'; Value = 'Albus Support'; Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportAppURL';   Value = 'albus-support-help';          Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportURL';      Value = 'https://www.github.com/oqullcan/albuswin'; Type = 'String' }
-)
-
-# ── 4.1  updates — Microsoft Store ──────────────────────────
-Write-Step 'ms-store update policy'
-Apply-Tweaks @(
-    # Disable automatic download/install of Store updates
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsStore'; Name = 'AutoDownload';    Value = 4 }
-    # Disable OS-upgrade offer in Store
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsStore'; Name = 'DisableOSUpgrade'; Value = 1 }
-)
-
-# ── 4.2  updates — general ──────────────────────────────────
-Write-Step 'windows update policy'
-Apply-Tweaks @(
-    # Suppress upgrade-available notification
-    @{ Path = 'HKLM:\SYSTEM\Setup\UpgradeNotification'; Name = 'UpgradeAvailable'; Value = 0 }
-
-    # Disable MRT infection reporting
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\MRT'; Name = 'DontReportInfectionInformation'; Value = 0 }
-
-    # Delivery Optimisation — LAN only (no internet peer sharing)
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'; Name = 'DODownloadMode'; Value = 0 }
-
-    # Disable Windows Insider / Preview builds
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PreviewBuilds'; Name = 'AllowBuildPreview'; Value = 0 }
-
-    # Reserved storage for updates — disabled
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager'; Name = 'ShippedWithReserves'; Value = 0 }
-
-    # Media Player auto-update — disabled
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMediaPlayer'; Name = 'DisableAutoUpdate'; Value = 0 }
-
-    # Block DevHome / Outlook from being silently installed by WU Orchestrator
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate';  Name = 'workCompleted'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate'; Name = 'workCompleted'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'; Name = 'BlockedOobeUpdaters'; Value = '["MS_Outlook"]'; Type = 'String' }
-
-    # Hide MCT / upgrade links and restart notifications
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'HideMCTLink';                  Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'RestartNotificationsAllowed2'; Value = 0 }
-)
-
-# Delete WU Orchestrator OOBE keys (block DevHome / Outlook push)
-$OrchestratorOobe = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'
-@('DevHomeUpdate', 'OutlookUpdate') | ForEach-Object {
-    $kPath = "$OrchestratorOobe\$_"
-    if (Test-Path $kPath) { Remove-Item -Path $kPath -Recurse -Force -EA 0 }
-}
-
-# ── 4.3  boot ───────────────────────────────────────────────
-Write-Step 'boot configuration'
-# Disable automatic disk check on boot (skip autochk on C:)
+# ── 1.1  boot
+Write-Step 'boot'
+# disable automatic disk-check on boot (skip autochk on c:)
 Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager' `
         -Name 'BootExecute' `
         -Value ([string[]]@('autocheck autochk /k:C*')) `
         -Type 'MultiString'
 
-# ── 4.4  bypass requirements (Windows 11) ───────────────────
+# disable wpbt (windows platform binary table)
+Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager' `
+        -Name 'DisableWpbtExecution' -Value 1
+
+# ── 1.2  crash control
+Write-Step 'crash control'
+Apply-Tweaks @(
+    # no auto-reboot on bsod
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\CrashControl'; Name = 'AutoReboot';       Value = 0 }
+    # small memory dump (64kb)
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\CrashControl'; Name = 'CrashDumpEnabled'; Value = 3 }
+)
+
+# ── 1.3  win32 priority separation
+Write-Step 'win32 priority separation'
+Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 38 # short quantum, variable, 3× foreground boost
+
+# ── 1.4  bypass windows 11 hardware requirements
 Write-Step 'bypass hw requirements'
 Apply-Tweaks @(
     @{ Path = 'HKLM:\SYSTEM\Setup\LabConfig'; Name = 'BypassSecureBootCheck'; Value = 1 }
@@ -1198,87 +645,35 @@ Apply-Tweaks @(
     @{ Path = 'HKLM:\SYSTEM\Setup\LabConfig'; Name = 'BypassRAMCheck';        Value = 1 }
     @{ Path = 'HKLM:\SYSTEM\Setup\LabConfig'; Name = 'BypassStorageCheck';    Value = 1 }
     @{ Path = 'HKLM:\SYSTEM\Setup\MoSetup';   Name = 'AllowUpgradesWithUnsupportedTPMOrCPU'; Value = 1 }
-
-    # Suppress unsupported hardware notification
     @{ Path = 'HKCU:\Control Panel\UnsupportedHardwareNotificationCache';         Name = 'SV1'; Value = 0 }
     @{ Path = 'HKCU:\Control Panel\UnsupportedHardwareNotificationCache';         Name = 'SV2'; Value = 0 }
     @{ Path = 'HKU:\.DEFAULT\Control Panel\UnsupportedHardwareNotificationCache'; Name = 'SV1'; Value = 0 }
     @{ Path = 'HKU:\.DEFAULT\Control Panel\UnsupportedHardwareNotificationCache'; Name = 'SV2'; Value = 0 }
-
-    # Bypass NRO (network requirement during OOBE)
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE'; Name = 'BypassNRO'; Value = 1 }
 )
 
-# ── 4.5  crash control ──────────────────────────────────────
-Write-Step 'crash control'
+# ── 1.5  bitlocker — disable auto device encryption
+Write-Step 'bitlocker'
+Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\BitLocker' -Name 'PreventDeviceEncryption' -Value 1
+Get-BitLockerVolume -ErrorAction SilentlyContinue | Where-Object { $_.ProtectionStatus -eq 'On' } | Disable-BitLocker -ErrorAction SilentlyContinue | Out-Null
+
+# ── 1.6  logon
+Write-Step 'logon'
 Apply-Tweaks @(
-    # Disable automatic reboot on BSOD
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\CrashControl'; Name = 'AutoReboot';        Value = 0 }
-    # Small memory dump (64 KB)
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\CrashControl'; Name = 'CrashDumpEnabled';  Value = 3 }
-)
-
-# ── 4.6  automatic maintenance — disabled ───────────────────
-Write-Step 'disable automatic maintenance'
-Apply-Tweaks @(
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; Name = 'MaintenanceDisabled'; Value = 1 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\ScheduledDiagnostics';         Name = 'EnabledExecution';    Value = 0 }
-)
-
-# ── 4.7  IFEO (Image File Execution Options) ────────────────
-Write-Step 'ifeo — kill telemetry & lower bg priorities'
-$Taskkill = '%windir%\System32\taskkill.exe'
-$IfeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
-
-# Processes killed via debugger redirect
-@(
-    'CompatTelRunner.exe'   # CEIP / telemetry
-    'AggregatorHost.exe'    # CEIP aggregator
-    'DeviceCensus.exe'      # Webcam telemetry
-    'FeatureLoader.exe'     # MS PC Manager spread
-    'BingChatInstaller.exe' # Bing pop-up ads
-    'BGAUpsell.exe'         # Bing pop-up ads
-    'BCILauncher.exe'       # Bing pop-up ads
-) | ForEach-Object {
-    Set-Reg -Path "$IfeoBase\$_" -Name 'Debugger' -Value $Taskkill -Type 'String'
-}
-
-# CPU/IO priority adjustments
-Apply-Tweaks @(
-    # SearchIndexer — Below Normal CPU
-    @{ Path = "$IfeoBase\SearchIndexer.exe\PerfOptions"; Name = 'CpuPriorityClass'; Value = 5 }
-    # ctfmon — Below Normal CPU
-    @{ Path = "$IfeoBase\ctfmon.exe\PerfOptions";        Name = 'CpuPriorityClass'; Value = 5 }
-    # fontdrvhost — Idle CPU + Idle IO
-    @{ Path = "$IfeoBase\fontdrvhost.exe\PerfOptions";   Name = 'CpuPriorityClass'; Value = 1 }
-    @{ Path = "$IfeoBase\fontdrvhost.exe\PerfOptions";   Name = 'IoPriority';       Value = 0 }
-    # lsass — Idle CPU
-    @{ Path = "$IfeoBase\lsass.exe\PerfOptions";         Name = 'CpuPriorityClass'; Value = 1 }
-    # sihost — Idle CPU + Idle IO
-    @{ Path = "$IfeoBase\sihost.exe\PerfOptions";        Name = 'CpuPriorityClass'; Value = 1 }
-    @{ Path = "$IfeoBase\sihost.exe\PerfOptions";        Name = 'IoPriority';       Value = 0 }
-)
-
-# ── 4.8  logon ──────────────────────────────────────────────
-Write-Step 'logon settings'
-Apply-Tweaks @(
-    # Disable first sign-in animation
     @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'EnableFirstLogonAnimation';     Value = 0 }
-    # Disable startup sound
     @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'DisableStartupSound';           Value = 1 }
-    # Disable auto sign-in after restart/update (prevents apps from reopening)
+    # prevent apps from reopening after restart/update
     @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'DisableAutomaticRestartSignOn'; Value = 1 }
+    # allow shutdown without logon
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'ShutdownWithoutLogon';         Value = 1 }
+    # msa optional for apps
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'MSAOptional';                  Value = 1 }
+    # fix for mapped network drives under uac
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'EnableLinkedConnections';      Value = 1 }
 )
 
-# ── 4.9  multimedia ─────────────────────────────────────────
-Write-Step 'multimedia system profile'
-Apply-Tweaks @(
-    # NetworkThrottlingIndex — 10 (default, keeps network perf stable)
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; Name = 'NetworkThrottlingIndex'; Value = 10 }
-)
-
-# ── 4.10  OOBE ──────────────────────────────────────────────
-Write-Step 'oobe configuration'
+# ── 1.7  oobe
+Write-Step 'oobe'
 $OobePaths = @(
     'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE'
     'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
@@ -1296,317 +691,831 @@ $OobeTweaks = @{
     EnableCortanaVoice        = 0
     DisableVoice              = 1
 }
-foreach ($p in $OobePaths) {
-    Set-Tweaks -Path $p -Settings $OobeTweaks
-}
-# String value in OOBE
+foreach ($p in $OobePaths) { Set-Tweaks -Path $p -Settings $OobeTweaks }
 Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' -Name 'NetworkLocation' -Value 'Home' -Type 'String'
 Set-Reg -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'       -Name 'NetworkLocation' -Value 'Home' -Type 'String'
-# Skype consent
 Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\AppSettings' -Name 'Skype-UserConsentAccepted' -Value 0
 
-# ── 4.12  Win32PrioritySeparation ───────────────────────────
-Write-Step 'win32 priority separation'
+# ── 1.8  desktop & responsiveness
+Write-Step 'control panel — desktop & responsiveness'
 Apply-Tweaks @(
-    # Short Quantum, variable, 3x foreground boost
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\PriorityControl'; Name = 'Win32PrioritySeparation'; Value = 38 }
+    # no jpeg wallpaper compression
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'JPEGImportQuality';    Value = 100;    Type = 'DWord' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'JPEGImportQuality';    Value = 100;    Type = 'DWord' }
+    # no system beep
+    @{ Path = 'HKCU:\Control Panel\Sound';           Name = 'Beep'; Value = 'no'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Sound';   Name = 'Beep'; Value = 'no'; Type = 'String' }
+    # instant start menu
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'MenuShowDelay';        Value = '0';    Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'MenuShowDelay';        Value = '0';    Type = 'String' }
+    # active window track timeout (10 ms)
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'ActiveWndTrkTimeout';  Value = 10 }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'ActiveWndTrkTimeout';  Value = 10 }
+    # auto-end tasks on shutdown
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'AutoEndTasks';         Value = '1';    Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'AutoEndTasks';         Value = '1';    Type = 'String' }
+    # hung app timeout (2 s)
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'HungAppTimeout';       Value = '2000'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'HungAppTimeout';       Value = '2000'; Type = 'String' }
+    # wait-to-kill app timeout (2 s)
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'WaitToKillAppTimeout'; Value = '2000'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'WaitToKillAppTimeout'; Value = '2000'; Type = 'String' }
+    # low-level hooks timeout (1 s)
+    @{ Path = 'HKCU:\Control Panel\Desktop';         Name = 'LowLevelHooksTimeout'; Value = '1000'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Desktop'; Name = 'LowLevelHooksTimeout'; Value = '1000'; Type = 'String' }
+    # audio ducking — do nothing on comms activity
+    @{ Path = 'HKCU:\Software\Microsoft\Multimedia\Audio';         Name = 'UserDuckingPreference'; Value = 3 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Multimedia\Audio'; Name = 'UserDuckingPreference'; Value = 3 }
+    # real-time clock = utc (dual-boot fix)
+    @{ Path = 'HKLM:\System\CurrentControlSet\Control\TimeZoneInformation'; Name = 'RealTimeIsUniversal'; Value = 1 }
 )
 
-# ── 4.13  BitLocker ─────────────────────────────────────────
-Write-Step 'bitlocker — disable auto device encryption'
+# ── 1.9  mouse
+Write-Step 'control panel — mouse'
 Apply-Tweaks @(
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\BitLocker'; Name = 'PreventDeviceEncryption'; Value = 1 }
+    # disable enhance pointer precision
+    @{ Path = 'HKCU:\Control Panel\Mouse';         Name = 'MouseSpeed';      Value = '0'; Type = 'String' }
+    @{ Path = 'HKCU:\Control Panel\Mouse';         Name = 'MouseThreshold1'; Value = '0'; Type = 'String' }
+    @{ Path = 'HKCU:\Control Panel\Mouse';         Name = 'MouseThreshold2'; Value = '0'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse'; Name = 'MouseSpeed';      Value = '0'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse'; Name = 'MouseThreshold1'; Value = '0'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Mouse'; Name = 'MouseThreshold2'; Value = '0'; Type = 'String' }
+    # mousekeys sensitivity purge
+    @{ Path = 'HKCU:\Control Panel\Accessibility\MouseKeys';         Name = 'MaximumSpeed';       Value = '-' }
+    @{ Path = 'HKCU:\Control Panel\Accessibility\MouseKeys';         Name = 'TimeToMaximumSpeed'; Value = '-' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Accessibility\MouseKeys'; Name = 'MaximumSpeed';       Value = '-' }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\Accessibility\MouseKeys'; Name = 'TimeToMaximumSpeed'; Value = '-' }
 )
-Get-BitLockerVolume -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProtectionStatus -eq 'On' } |
-    Disable-BitLocker -ErrorAction SilentlyContinue | Out-Null
 
-# ── 4.14  security ──────────────────────────────────────────
-Write-Step 'security settings'
+# ── 1.10  ease of access — purge & disable
+Write-Step 'ease of access purge'
+$AccHives = @(
+    'AudioDescription','Blind Access','HighContrast','Keyboard Preference','Keyboard Response','MouseKeys',
+    'On','ShowSounds','SlateLaunch','SoundSentry','StickyKeys','TimeOut','ToggleKeys'
+)
+foreach ($h in $AccHives) {
+    Set-Reg -Path "HKCU:\Control Panel\Accessibility\$h"         -Name 'Flags' -Value '0' -Type 'String'
+    Set-Reg -Path "HKU:\.DEFAULT\Control Panel\Accessibility\$h" -Name 'Flags' -Value '0' -Type 'String'
+}
+
+# ── 1.11  typing & autocorrect
+Write-Step 'typing & input'
+$TypingKeys = @('EnableAutocorrection','EnableSpellchecking','EnableTextPrediction',
+                'EnablePredictionSpaceInsertion','EnableDoubleTapSpace')
+foreach ($k in $TypingKeys) {
+    Set-Reg -Path 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7' -Name $k -Value 0
+    Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7' -Name $k -Value 0
+}
 Apply-Tweaks @(
-    # Hide Account Protection nag in Defender (redirects to Settings anyway)
+    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'InsightsEnabled';          Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'InsightsEnabled';          Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'EnableHwkbTextPrediction'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'EnableHwkbTextPrediction'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'EnableHwkbAutocorrection'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'EnableHwkbAutocorrection'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Input\Settings'; Name = 'MultilingualEnabled';      Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\Settings'; Name = 'MultilingualEnabled';      Value = 0 }
+    # inking & typing data collection
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\TextInput'; Name = 'AllowLinguisticDataCollection'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Input\TIPC'; Name = 'Enabled'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Input\TIPC'; Name = 'Enabled'; Value = 0 }
+    # input personalization
+    @{ Path = 'HKCU:\Software\Microsoft\InputPersonalization';                  Name = 'RestrictImplicitInkCollection';  Value = 1 }
+    @{ Path = 'HKCU:\Software\Microsoft\InputPersonalization';                  Name = 'RestrictImplicitTextCollection'; Value = 1 }
+    @{ Path = 'HKCU:\Software\Microsoft\InputPersonalization\TrainedDataStore'; Name = 'HarvestContacts';                Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\InputPersonalization\Settings';         Name = 'AcceptedPrivacyPolicy';          Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\InputPersonalization';         Name = 'RestrictImplicitInkCollection';  Value = 1 }
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\InputPersonalization';         Name = 'RestrictImplicitTextCollection'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization';         Name = 'RestrictImplicitInkCollection';  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization';         Name = 'RestrictImplicitTextCollection'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization';         Name = 'AllowInputPersonalization';      Value = 0 }
+)
+
+# ── 1.12  context menu
+Write-Step 'context menu'
+# classic right-click context menu (windows 11)
+Set-Reg -Path 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' -Name '' -Value '' -Type 'String'
+
+# ── 1.13  explorer performance
+Write-Step 'explorer performance'
+Apply-Tweaks @(
+    # disable automatic folder-type discovery
+    @{ Path = 'HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell';         Name = 'FolderType'; Value = 'NotSpecified'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell'; Name = 'FolderType'; Value = 'NotSpecified'; Type = 'String' }
+    # force explorer to high-performance gpu
+    @{ Path = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences';         Name = 'C:\Windows\explorer.exe'; Value = 'GpuPreference=2;'; Type = 'String' }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\DirectX\UserGpuPreferences'; Name = 'C:\Windows\explorer.exe'; Value = 'GpuPreference=2;'; Type = 'String' }
+    # disable onedrive account-based insights
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'DisableGraphRecentItems'; Value = 1 }
+    # hide spotlight icon on Desktop (24h2)
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel'; Name = '{2cc5ca98-6485-489a-920e-b3e88a6ccce3}'; Value = 1 }
+    # raise context menu selection threshold
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer';         Name = 'MultipleInvokePromptMinimum'; Value = 100 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer'; Name = 'MultipleInvokePromptMinimum'; Value = 100 }
+    # remove '- shortcut' text from new shortcuts
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer';         Name = 'link'; Value = ([byte[]](0x00,0x00,0x00,0x00)); Type = 'Binary' }
+    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer'; Name = 'link'; Value = ([byte[]](0x00,0x00,0x00,0x00)); Type = 'Binary' }
+    # always show copy-dialog details
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager';         Name = 'EnthusiastMode'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager'; Name = 'EnthusiastMode'; Value = 1 }
+    # disable autoplay
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers';         Name = 'DisableAutoplay'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers'; Name = 'DisableAutoplay'; Value = 1 }
+    # disable autorun on all drives
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoDriveTypeAutoRun'; Value = 255 }
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoDriveTypeAutoRun'; Value = 255 }
+    # no low disk-space balloon
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'NoLowDiskSpaceChecks';     Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoLowDiskSpaceChecks';     Value = 1 }
+    # do not track shell shortcuts during roaming
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'LinkResolveIgnoreLinkInfo'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'LinkResolveIgnoreLinkInfo'; Value = 1 }
+    # do not use search when resolving shell shortcuts
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'NoResolveSearch'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoResolveSearch'; Value = 1 }
+    # no online tips in explorer/settings
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'AllowOnlineTips'; Value = 0 }
+    # service shutdown timeout (1.5 s)
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control'; Name = 'WaitToKillServiceTimeout'; Value = '1500'; Type = 'String' }
+)
+
+# downloads folder — disable group by
+$DownloadsID = '{885a186e-a440-4ada-812b-db871b942259}'
+Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\$DownloadsID" -Recurse -EA 0 |
+    ForEach-Object {
+        if ((Get-ItemProperty $_.PSPath -EA 0).GroupBy) {
+            Set-ItemProperty -Path $_.PSPath -Name GroupBy -Value '' -EA 0
+        }
+    }
+$bagsPath = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags'
+Get-ChildItem -Path $bagsPath -EA 0 | ForEach-Object {
+    $fp = Join-Path $_.PSPath "Shell\$DownloadsID"
+    if (Test-Path $fp) { Remove-Item -Path $fp -Recurse -EA 0 }
+}
+
+# ── 1.14  explorer view
+Write-Step 'explorer view'
+Apply-Tweaks @(
+    # show full path in title bar
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState';         Name = 'FullPath';                    Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState'; Name = 'FullPath';                    Value = 1 }
+    # show file extensions
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'HideFileExt';                 Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'HideFileExt';                 Value = 0 }
+    # no onedrive sync-provider ads
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowSyncProviderNotifications'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowSyncProviderNotifications'; Value = 0 }
+)
+Set-Reg -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI' -Name 'AllowEdgeSwipe' -Value 0
+
+# ── 1.15  taskbar
+Write-Step 'taskbar'
+Apply-Tweaks @(
+    # no taskbar animations
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAnimations'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAnimations'; Value = 0 }
+    # search icon only (no box)
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'SearchboxTaskbarMode'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; Value = 1 }
+    # hide task view button
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowTaskViewButton'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowTaskViewButton'; Value = 0 }
+    # enable 'end task' in right-click
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings';         Name = 'TaskbarEndTask'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings'; Name = 'TaskbarEndTask'; Value = 1 }
+    # open file explorer to this pc
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'LaunchTo'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'LaunchTo'; Value = 1 }
+    # hide pop-up tooltips
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowInfoTip'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowInfoTip'; Value = 0 }
+    # tablet mode — always desktop, no auto-hide
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'SignInMode';                           Value = 1 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'TabletMode';                           Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell';         Name = 'ConvertibleSlateModePromptPreference'; Value = 2 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'SignInMode';                           Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'TabletMode';                           Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ImmersiveShell'; Name = 'ConvertibleSlateModePromptPreference'; Value = 2 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAppsVisibleInTabletMode';    Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAppsVisibleInTabletMode';    Value = 1 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAutoHideInTabletMode';       Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAutoHideInTabletMode';       Value = 0 }
+    # remove news & interests / widgets
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'; Name = 'EnableFeeds';           Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh';                   Name = 'AllowNewsAndInterests'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds';         Name = 'ShellFeedsTaskbarViewMode'; Value = 2 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Feeds'; Name = 'ShellFeedsTaskbarViewMode'; Value = 2 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarDa'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarDa'; Value = 0 }
+    # remove people bar
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'HidePeopleBar'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'HidePeopleBar'; Value = 1 }
+    # remove meet now
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'HideSCAMeetNow'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'HideSCAMeetNow'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';         Name = 'HideSCAMeetNow'; Value = 1 }
+    # disable chat (teams) icon
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat'; Name = 'ChatIcon'; Value = 3 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarMn'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarMn'; Value = 0 }
+    # windows ink workspace — on, no suggested apps
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace'; Name = 'AllowWindowsInkWorkspace';                Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace'; Name = 'AllowSuggestedAppsInWindowsInkWorkspace'; Value = 0 }
+    # power — show sleep in shutdown menu
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings'; Name = 'ShowSleepOption'; Value = 1 }
+)
+
+# ── 1.16  notifications & tray
+Write-Step 'notifications & tray'
+Apply-Tweaks @(
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CurrentVersion\PushNotifications'; Name = 'NoToastApplicationNotification'; Value = 1 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'; Name = 'NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND';         Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'; Name = 'NOC_GLOBAL_SETTING_ALLOW_TOASTS_ABOVE_LOCK';          Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'; Name = 'NOC_GLOBAL_SETTING_ALLOW_CRITICAL_TOASTS_ABOVE_LOCK'; Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'; Name = 'NOC_GLOBAL_SETTING_TOASTS_ENABLED';                   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'ToastEnabled'; Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'ToastEnabled'; Value = 0 }
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\PushNotifications'; Name = 'ToastEnabled'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications'; Name = 'ToastEnabled'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userNotificationListener'; Name = 'Value'; Value = 'Deny'; Type = 'String' }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\userNotificationListener'; Name = 'Value'; Value = 'Deny'; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'DisableNotificationCenter'; Value = 1 }
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'DisableNotificationCenter'; Value = 1 }
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'NoBalloonFeatureAdvertisements'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'NoBalloonFeatureAdvertisements'; Value = 1 }
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';         Name = 'NoAutoTrayNotify';               Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'NoAutoTrayNotify';               Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications'; Name = 'NoCloudApplicationNotification'; Value = 1 }
+    # oobe "let's finish setting up" nag
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement';         Name = 'ScoobeSystemSettingEnabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'; Name = 'ScoobeSystemSettingEnabled'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Context\CloudExperienceHostIntent\Wireless';         Name = 'ScoobeCheckCompleted'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Context\CloudExperienceHostIntent\Wireless'; Name = 'ScoobeCheckCompleted'; Value = 1 }
+)
+
+# ── 1.17  start menu
+Write-Step 'start menu'
+$Pins = '{"pinnedList":[{"packagedAppId":"Microsoft.WindowsStore_8wekyb3d8bbwe!App"},{"packagedAppId":"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"},{"packagedAppId":"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"},{"packagedAppId":"Microsoft.Paint_8wekyb3d8bbwe!App"},{"desktopAppLink":"%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\File Explorer.lnk"},{"packagedAppId":"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}]}'
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'ConfigureStartPins'; Value = $Pins; Type = 'String' }
+    # start recommendations
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'Start_IrisRecommendations';  Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'Start_IrisRecommendations';  Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'Start_AccountNotifications'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'Start_AccountNotifications'; Value = 0 }
+    # start folder shortcuts — all hidden except settings
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDocuments';                  Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDocuments_ProviderSet';      Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDownloads';                  Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderDownloads_ProviderSet';      Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderFileExplorer';               Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderFileExplorer_ProviderSet';   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderHomeGroup';                  Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderHomeGroup_ProviderSet';      Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderMusic';                      Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderMusic_ProviderSet';          Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderNetwork';                    Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderNetwork_ProviderSet';        Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPersonalFolder';             Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPersonalFolder_ProviderSet'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPictures';                   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderPictures_ProviderSet';       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderSettings';                   Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderSettings_ProviderSet';       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderVideos';                     Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'AllowPinnedFolderVideos_ProviderSet';         Value = 0 }
+)
+
+# ── 1.18  search & indexing
+Write-Step 'search & indexing'
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\Software\Microsoft\Windows Search\Gather\Windows\SystemIndex'; Name = 'RespectPowerModes';                   Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';           Name = 'PreventIndexOnBattery';               Value = 1 }
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer';                 Name = 'DisableSearchBoxSuggestions';         Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions';                 Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowCloudSearch';                            Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowCortanaAboveLock';                       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowCortana';                                Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowCortanaInAAD';                           Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowCortanaInAADPathOOBE';                   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'AllowSearchToUseLocation';                    Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'ConnectedSearchUseWeb';                       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'ConnectedSearchUseWebOverMeteredConnections'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'DisableWebSearch';                            Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search';   Name = 'ConnectedSearchPrivacy';                      Value = 3 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'CortanaConsent';    Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'CortanaConsent';    Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'BingSearchEnabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'BingSearchEnabled'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Speech_OneCore\Preferences'; Name = 'VoiceActivationEnableAboveLockscreen'; Value = 0 }
+    # disable store results in search (25h2)
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\WinStore.Tasks.WindowsSearchTask'; Name = 'ActivationType'; Value = 4294967295 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\WinStore.Tasks.WindowsSearchTask'; Name = 'Server';         Value = ''; Type = 'String' }
+    # prevent webview2 from searchhost
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Policies\Microsoft\FeatureManagement\Overrides'; Name = '1694661260'; Value = 0 }
+)
+
+# ── 1.19  windows update
+Write-Step 'windows update'
+
+# pause windows updates for 16 years
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'FlightSettingsMaxPauseDays'   -Value 5269 -Type 'DWord'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseFeatureUpdatesStartTime' -Value '2023-08-17T12:47:51Z' -Type 'String'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseFeatureUpdatesEndTime'   -Value '2038-01-19T03:14:07Z' -Type 'String'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseQualityUpdatesStartTime' -Value '2023-08-17T12:47:51Z' -Type 'String'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseQualityUpdatesEndTime'   -Value '2038-01-19T03:14:07Z' -Type 'String'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseUpdatesStartTime'        -Value '2023-08-17T12:47:51Z' -Type 'String'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name 'PauseUpdatesExpiryTime'       -Value '2038-01-19T03:14:07Z' -Type 'String'
+Apply-Tweaks @(
+    # drivers (windows update için)
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\DriverSearching'; Name = 'DontSearchWindowsUpdate';          Value = 1 }
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\DriverSearching'; Name = 'DriverUpdateWizardWuSearchEnabled'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\DriverSearching'; Name = 'DontPromptForWindowsUpdate';       Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DriverSearching'; Name = 'DontPromptForWindowsUpdate';       Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DriverSearching'; Name = 'SearchOrderConfig';                Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\WindowsUpdate';   Name = 'ExcludeWUDriversInQualityUpdate';  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings';        Name = 'ExcludeWUDriversInQualityUpdate';  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata'; Name = 'PreventDeviceMetadataFromNetwork'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata'; Name = 'PreventDeviceMetadataFromNetwork'; Value = 1 }
+    # store — no silent os upgrade, no auto-update push
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsStore'; Name = 'AutoDownload';     Value = 4 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsStore'; Name = 'DisableOSUpgrade'; Value = 1 }
+    # suppress upgrade-available notification
+    @{ Path = 'HKLM:\SYSTEM\Setup\UpgradeNotification'; Name = 'UpgradeAvailable'; Value = 0 }
+    # mrt infection reporting — off
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\MRT'; Name = 'DontReportInfectionInformation'; Value = 0 }
+    # delivery optimisation — LAN only
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'; Name = 'DODownloadMode'; Value = 0 }
+    # no insider / preview builds
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PreviewBuilds'; Name = 'AllowBuildPreview'; Value = 0 }
+    # no reserved storage
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager'; Name = 'ShippedWithReserves'; Value = 0 }
+    # media player auto-update — off
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMediaPlayer'; Name = 'DisableAutoUpdate'; Value = 0 }
+    # block devhome / outlook silent installs
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate';  Name = 'workCompleted'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate';  Name = 'workCompleted'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'; Name = 'BlockedOobeUpdaters'; Value = '["MS_Outlook"]'; Type = 'String' }
+    # hide mct link & restart notifications
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'HideMCTLink';                  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'RestartNotificationsAllowed2'; Value = 0 }
+    # hide insider page from WU settings
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsSelfHost\UI\Visibility'; Name = 'HideInsiderPage'; Value = 1 }
+    # hide wu tray icon
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; Name = 'TrayIconVisibility'; Value = 0 }
+    # wu update notification — silent (level 2)
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\WindowsUpdate'; Name = 'UpdateNotificationLevel'; Value = 2 }
+)
+# delete wu orchestrator oobe keys
+$OrchestratorOobe = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'
+@('DevHomeUpdate','OutlookUpdate') | ForEach-Object {
+    $kp = "$OrchestratorOobe\$_"
+    if (Test-Path $kp) { Remove-Item -Path $kp -Recurse -Force -EA 0 }
+}
+
+# ── 1.20  multimedia & power
+Write-Step 'multimedia & power'
+Apply-Tweaks @(
+    # networkthrottlingindex = 10 (default — keeps network stable)
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; Name = 'NetworkThrottlingIndex'; Value = 10 }
+    # offline maps — wifi-only, no auto-update
+    @{ Path = 'HKLM:\SYSTEM\Maps'; Name = 'UpdateOnlyOnWifi';  Value = 1 }
+    @{ Path = 'HKLM:\SYSTEM\Maps'; Name = 'AutoUpdateEnabled'; Value = 0 }
+    # disable automatic maintenance & scheduled diagnostics
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'; Name = 'MaintenanceDisabled'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\ScheduledDiagnostics';          Name = 'EnabledExecution';    Value = 0 }
+    # disable system restore auto-config (leaves user in control)
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'; Name = 'RPSessionInterval'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore\cfg'; Name = 'DiskPercent'; Value = 0 }
+)
+
+# ── 1.21  performance — ifeo & process priorities
+Write-Step 'ifeo — telemetry kill & process priorities'
+$Taskkill = '%windir%\System32\taskkill.exe'
+$IfeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
+
+# redirect telemetry / adware processes to taskkill
+@(
+    'CompatTelRunner.exe'   # ceip telemetry
+    'AggregatorHost.exe'    # ceip aggregator
+    'DeviceCensus.exe'      # webcam telemetry
+    'FeatureLoader.exe'     # ms pc manager spread
+    'BingChatInstaller.exe' # bing pop-up ads
+    'BGAUpsell.exe'         # bing pop-up ads
+    'BCILauncher.exe'       # Bing pop-up ads
+) | ForEach-Object {
+    Set-Reg -Path "$IfeoBase\$_" -Name 'Debugger' -Value $Taskkill -Type 'String'
+}
+
+# cpu / io priority adjustments for background processes
+Apply-Tweaks @(
+    @{ Path = "$IfeoBase\SearchIndexer.exe\PerfOptions"; Name = 'CpuPriorityClass'; Value = 5 } # below normal
+    @{ Path = "$IfeoBase\ctfmon.exe\PerfOptions";        Name = 'CpuPriorityClass'; Value = 5 } # below normal
+    @{ Path = "$IfeoBase\fontdrvhost.exe\PerfOptions";   Name = 'CpuPriorityClass'; Value = 1 } # idle
+    @{ Path = "$IfeoBase\fontdrvhost.exe\PerfOptions";   Name = 'IoPriority';       Value = 0 } # idle
+    @{ Path = "$IfeoBase\lsass.exe\PerfOptions";         Name = 'CpuPriorityClass'; Value = 1 } # idle
+    @{ Path = "$IfeoBase\sihost.exe\PerfOptions";        Name = 'CpuPriorityClass'; Value = 1 } # idle
+    @{ Path = "$IfeoBase\sihost.exe\PerfOptions";        Name = 'IoPriority';       Value = 0 } # idle
+)
+
+# disable rsop logging (group policy) — reduces boot overhead
+Set-Reg -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name 'RSoPLogging' -Value 0
+
+# disable office background logging
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\ClickToRun\OverRide';              Name = 'DisableLogManagement'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration';  Name = 'TimerInterval';        Value = '900000'; Type = 'String' }
+)
+
+
+# ── 1.22  security
+Write-Step 'security'
+Apply-Tweaks @(
+    # disable uac
+    $p = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    @{ Path = $p; Name = 'EnableVirtualization';        Value = 0 }
+    @{ Path = $p; Name = 'EnableInstallerDetection';    Value = 0 }
+    @{ Path = $p; Name = 'PromptOnSecureDesktop';       Value = 0 }
+    @{ Path = $p; Name = 'EnableLUA';                   Value = 0 }
+    @{ Path = $p; Name = 'EnableSecureUIAPaths';        Value = 0 }
+    @{ Path = $p; Name = 'ConsentPromptBehaviorAdmin';  Value = 0 }
+    @{ Path = $p; Name = 'ValidateAdminCodeSignatures'; Value = 0 }
+    @{ Path = $p; Name = 'EnableUIADesktopToggle';      Value = 0 }
+    @{ Path = $p; Name = 'ConsentPromptBehaviorUser';   Value = 0 }
+    @{ Path = $p; Name = 'FilterAdministratorToken';    Value = 0 }
+    # hide account protection nag in defender
     @{ Path = 'HKCU:\Software\Microsoft\Windows Security Health\State';         Name = 'AccountProtection_MicrosoftAccount_Disconnected'; Value = 0 }
     @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows Security Health\State'; Name = 'AccountProtection_MicrosoftAccount_Disconnected'; Value = 0 }
-
-    # Disable Watson / generic Defender reports
+    # disable defender generic reports (watson)
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows Defender\Reporting'; Name = 'DisableGenericRePorts'; Value = 1 }
-
-    # Disable Defender signature updates on battery
+    # no signature updates on battery
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows Defender\Signature Updates'; Name = 'DisableScheduledSignatureUpdateOnBattery'; Value = 1 }
-
-    # SmartScreen — App Install Control (turn off app recommendations)
+    # smartscreen — app install control → anywhere
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows Defender\SmartScreen'; Name = 'ConfigureAppInstallControlEnabled'; Value = 1 }
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows Defender\SmartScreen'; Name = 'ConfigureAppInstallControl';        Value = 'Anywhere'; Type = 'String' }
-
-    # Disable web-content evaluation for AppHost
+    # disable web-content evaluation (apphost)
     @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost'; Name = 'EnableWebContentEvaluation'; Value = 0 }
-
-    # Disable SmartScreen in Microsoft Edge (legacy policy)
+    # disable smartscreen in edge (legacy)
     @{ Path = 'HKLM:\Software\Policies\Microsoft\MicrosoftEdge\PhishingFilter'; Name = 'EnabledV9'; Value = 0 }
-
-    # Hide Windows Security systray icon
+    # hide windows security systray icon
     @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Systray'; Name = 'HideSystray'; Value = 1 }
-
-    # Remove SecurityHealth from startup run key
+    # remove securityhealth from startup
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'; Name = 'SecurityHealth'; Value = '-' }
+    # fix vs not being allowed to install webview2 (aveyo)
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'; Name = 'InstallDefault';                                Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'; Name = 'Install{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'; Name = 'Install{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'; Name = 'DoNotUpdateToEdgeWithChromium';                 Value = 1 }
+    # enable sudo — inline mode
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo'; Name = 'Enabled'; Value = 3 }
 )
 
-# ── 4.15  VBS / Virtualization Based Security ───────────────
-Write-Step 'vbs — virtualization based security'
-# VBS disable is handled by revitool.exe (also disables Memory Integrity / HVCI).
-# Call in your script where revitool invocations are grouped:
-#   revitool.exe tweaks security vbs disable
-Write-Log 'VBS: delegated to revitool — skipped registry-only path'
-
-# ── 5.1  application compatibility ──────────────────────────
-Write-Step 'app compatibility'
+# disable vbs & memory integrity
+write-step 'disable vbs & memory integrity'
+bcdedit /set nx AlwaysOff | Out-Null
+bcdedit /set hypervisorlaunchtype off | Out-Null
+bcdedit /set vsmlaunchtype off | Out-Null
 Apply-Tweaks @(
-    # Disable Application Compatibility Engine
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableEngine';    Value = 1 }
-    # Disable Application Telemetry (AIT)
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'AITEnable';        Value = 0 }
-    # Disable Problem Steps Recorder
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableUAR';       Value = 1 }
-    # Disable Program Compatibility Assistant
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisablePCA';       Value = 1 }
-    # Disable Program Inventory
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableInventory'; Value = 1 }
-    # Disable SwitchBack Compatibility Engine
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'SbEnable';         Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name = 'EnableVirtualizationBasedSecurity'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name = 'LsaCfgFlags';                       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'; Name = 'HVCIMATRequired';                   Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\DeviceGuard';        Name = 'EnableVirtualizationBasedSecurity'; Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\DeviceGuard';        Name = 'Mandatory';                         Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\DeviceGuard';        Name = 'HVCIMATRequired';                   Value = 0 }
+)
+$hvci = 'HKLM:\SYSTEM\ControlSet001\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+Set-Reg -Path $hvci -Name 'Enabled' -Value 0
+@('WasEnabledBy','ChangedInBootCycle') | ForEach-Object { Remove-ItemProperty -Path $hvci -Name $_ -ErrorAction SilentlyContinue | Out-Null }
+
+# ── 1.23  privacy & telemetry
+Write-Step 'telemetry & data collection'
+Apply-Tweaks @(
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\DataCollection';                            Name = 'AllowTelemetry';   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection';                            Name = 'AllowTelemetry';   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection';             Name = 'AllowTelemetry';   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Policies\DataCollection'; Name = 'AllowTelemetry';   Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\System\AllowTelemetry';                Name = 'value';            Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\DevicePolicy\AllowTelemetry';    Name = 'DefaultValue';     Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\Store\AllowTelemetry';           Name = 'Value';            Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowCommercialDataPipeline';                 Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowDeviceNameInTelemetry';                  Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableEnterpriseAuthProxy';                  Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'MicrosoftEdgeDataOptIn';                      Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableTelemetryOptInChangeNotification';     Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableTelemetryOptInSettingsUx';             Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DoNotShowFeedbackNotifications';              Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitEnhancedDiagnosticDataWindowsAnalytics'; Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowBuildPreview';                           Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitDiagnosticLogCollection';                Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitDumpCollection';                         Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\PreviewBuilds';  Name = 'EnableConfigFlighting';                       Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\System'; Name = 'AllowExperimentation'; Value = 0 }
+    # wmi autologger — disable telemetry loggers
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\Diagtrack-Listener'; Name = 'Start'; Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\SQMLogger';          Name = 'Start'; Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\SetupPlatformTel';   Name = 'Start'; Value = 0 }
+    # tailored experiences
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy';         Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Privacy'; Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\DevicePolicy\TailoredExperiencesWithDiagnosticDataEnabled'; Name = 'DefaultValue'; Value = 0 }
+    # diagnostic event transcript
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Diagnostics\DiagTrack\EventTranscriptKey'; Name = 'EnableEventTranscript'; Value = 0 }
+    # feedback frequency — never
+    @{ Path = 'HKCU:\Software\Microsoft\Siuf\Rules';         Name = 'NumberOfSIUFInPeriod'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Siuf\Rules';         Name = 'PeriodInNanoSeconds';  Value = '-' }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Siuf\Rules'; Name = 'NumberOfSIUFInPeriod'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Siuf\Rules'; Name = 'PeriodInNanoSeconds';  Value = '-' }
+    # activity history
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'UploadUserActivities';  Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'PublishUserActivities'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'EnableActivityFeed';    Value = 0 }
+    # online speech recognition
+    @{ Path = 'HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy';         Name = 'HasAccepted'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy'; Name = 'HasAccepted'; Value = 0 }
+    # advertising id
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Id';      Value = '-' }
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Id';      Value = '-' }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AdvertisingInfo';       Name = 'DisabledByGroupPolicy'; Value = 1 }
+    # language list — no website local-content access
+    @{ Path = 'HKCU:\Control Panel\International\User Profile';         Name = 'HttpAcceptLanguageOptOut'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Control Panel\International\User Profile'; Name = 'HttpAcceptLanguageOptOut'; Value = 1 }
+    # clipboard history off (keep clipboard functional)
+    @{ Path = 'HKCU:\Software\Microsoft\Clipboard';         Name = 'EnableClipboardHistory'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Clipboard'; Name = 'EnableClipboardHistory'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'AllowClipboardHistory';     Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'AllowCrossDeviceClipboard'; Value = 1 }
+    # game dvr
+    @{ Path = 'HKCU:\System\GameConfigStore';         Name = 'GameDVR_Enabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 }
+    # settings sync — all off
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableApplicationSettingSync';                 Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableApplicationSettingSyncUserOverride';     Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSync';                            Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSyncUserOverride';                Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWebBrowserSettingSync';                  Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWebBrowserSettingSyncUserOverride';      Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableDesktopThemeSettingSync';                Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableDesktopThemeSettingSyncUserOverride';    Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSyncOnPaidNetwork';                      Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWindowsSettingSync';                     Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableWindowsSettingSyncUserOverride';         Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableCredentialsSettingSync';                 Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableCredentialsSettingSyncUserOverride';     Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisablePersonalizationSettingSync';             Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisablePersonalizationSettingSyncUserOverride'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableStartLayoutSettingSync';                 Value = 2 }
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableStartLayoutSettingSyncUserOverride';     Value = 1 }
+    # disable recall / ai snapshots (24h2)
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 }
+    # gaming copilot dll (xbox)
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions'; Name = 'ActivationType'; Value = 4294967295 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions'; Name = 'Server';         Value = ''; Type = 'String' }
+    # disable valuebanners in settings
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\ValueBanner.IdealStateFeatureControlProvider'; Name = 'ActivationType'; Value = 4294967295 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\ValueBanner.IdealStateFeatureControlProvider'; Name = 'Server';         Value = ''; Type = 'String' }
+    # wi-fi sense — all off
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\config';   Name = 'AutoConnectAllowedOEM'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\features'; Name = 'PaidWifi';              Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WcmSvc\wifinetworkmanager\features'; Name = 'WiFiSenseOpen';         Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowWiFiHotSpotReporting';           Name = 'value'; Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\WiFi\AllowAutoConnectToWiFiSenseHotspots'; Name = 'value'; Value = 0 }
+    # timeline suggestions
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SubscribedContent-353698Enabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353698Enabled'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SystemPaneSuggestionsEnabled';    Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SystemPaneSuggestionsEnabled';    Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager';         Name = 'SubscribedContent-338388Enabled'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-338388Enabled'; Value = 0 }
+    # settings account notifications
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications';         Name = 'EnableAccountNotifications'; Value = 1 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications'; Name = 'EnableAccountNotifications'; Value = 1 }
 )
 
-# ── 5.2  content delivery manager (CDM) ─────────────────────
-Write-Step 'content delivery manager'
-$CdmBase  = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
-$CdmDef   = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
-
-Set-Tweaks -Path $CdmBase -Settings @{
-    ContentDeliveryAllowed          = 0
-    SubscribedContentEnabled        = 0
-    'SubscribedContent-310093Enabled' = 0   # Windows Welcome Experience
-    SoftLandingEnabled              = 0
-    'SubscribedContent-338389Enabled' = 0   # Tips / tricks
-    SilentInstalledAppsEnabled      = 0
-    PreInstalledAppsEnabled         = 0
-    PreInstalledAppsEverEnabled     = 0
-    OemPreInstalledAppsEnabled      = 0
-    FeatureManagementEnabled        = 0
-    RemediationRequired             = 0
-    'SubscribedContent-314559Enabled' = 0
-    'SubscribedContent-280815Enabled' = 0
-    'SubscribedContent-314563Enabled' = 0   # My People
-    'SubscribedContent-202914Enabled' = 0
-    'SubscribedContent-338387Enabled' = 0   # Facts/Tips on Lock Screen
-    'SubscribedContent-280810Enabled' = 0   # OneDrive SyncProviders
-    'SubscribedContent-280811Enabled' = 0   # OneDrive
-    RotatingLockScreenEnabled       = 0
-    RotatingLockScreenOverlayEnabled= 0
-}
-Set-Tweaks -Path $CdmDef -Settings @{
-    ContentDeliveryAllowed          = 0
-    SubscribedContentEnabled        = 0
-    'SubscribedContent-310093Enabled' = 0
-    SoftLandingEnabled              = 0
-    'SubscribedContent-338389Enabled' = 0
-    SilentInstalledAppsEnabled      = 0
-    PreInstalledAppsEnabled         = 0
-    PreInstalledAppsEverEnabled     = 0
-    OemPreInstalledAppsEnabled      = 0
-    FeatureManagementEnabled        = 0
-    RemediationRequired             = 0
-    'SubscribedContent-314559Enabled' = 0
-    'SubscribedContent-280815Enabled' = 0
-    'SubscribedContent-314563Enabled' = 0
-    'SubscribedContent-202914Enabled' = 0
-    'SubscribedContent-338387Enabled' = 0
-    'SubscribedContent-280810Enabled' = 0
-    'SubscribedContent-280811Enabled' = 0
-    RotatingLockScreenEnabled       = 0
-    RotatingLockScreenOverlayEnabled= 0
-}
-
-# Delete CDM Subscriptions and SuggestedApps keys
+# ── 1.24  app permissions
+Write-Step 'app permissions'
+$Cap = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+$CapLM = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+$CapDef = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
 @(
-    'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions'
-    'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions'
-    'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps'
-    'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps'
+    @{ s = 'location';               cu = 'Deny';  lm = $null;    du = 'Deny'  }
+    @{ s = 'webcam';                 cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'microphone';             cu = 'Allow'; lm = 'Allow';  du = $null   }
+    @{ s = 'activity';               cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'userAccountInformation'; cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'appointments';           cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'userDataTasks';          cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'chat';                   cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'radios';                 cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'bluetoothSync';          cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'appDiagnostics';         cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'documentsLibrary';       cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'picturesLibrary';        cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'videosLibrary';          cu = 'Deny';  lm = 'Deny';   du = $null   }
+    @{ s = 'broadFileSystemAccess';  cu = 'Deny';  lm = 'Deny';   du = $null   }
 ) | ForEach-Object {
-    if (Test-Path $_) { Remove-Item -Path $_ -Recurse -Force -EA 0 }
+    Set-Reg -Path "$Cap\$($_.s)"    -Name 'Value' -Value $_.cu -Type 'String'
+    Set-Reg -Path "$CapDef\$($_.s)" -Name 'Value' -Value $_.cu -Type 'String'
+    if ($_.lm) { Set-Reg -Path "$CapLM\$($_.s)" -Name 'Value' -Value $_.lm -Type 'String' }
 }
 
-# ── 5.3  CEIP ───────────────────────────────────────────────
+# ── 1.25  ceip
 Write-Step 'ceip'
 Apply-Tweaks @(
     @{ Path = 'HKLM:\Software\Policies\Microsoft\SQMClient\Windows';                           Name = 'CEIPEnable';                        Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\AppV\CEIP';                                   Name = 'CEIPEnable';                        Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\AppV\CEIP';                                   Name = 'CEIPEnable';                        Value = 0 }
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Internet Explorer\SQM';                       Name = 'DisableCustomerImprovementProgram'; Value = 1 }
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Messenger\Client';                            Name = 'CEIP';                              Value = 2 }
     @{ Path = 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\UnattendSettings\SQMClient'; Name = 'CEIPEnabled';                       Value = 0 }
 )
 
-# ── 5.4  cloud content / Spotlight ──────────────────────────
+# ── 1.26  app compatibility
+Write-Step 'app compatibility'
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableEngine';    Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'AITEnable';        Value = 0 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableUAR';       Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisablePCA';       Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableInventory'; Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppCompat'; Name = 'SbEnable';         Value = 1 }
+)
+
+# ── 1.27  cloud content & spotlight
 Write-Step 'cloud content & spotlight'
 Apply-Tweaks @(
-    # Disable Windows Tips
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableSoftLanding'; Value = 1 }
-
-    # Spotlight — per-user
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'ConfigureWindowsSpotlight';                         Value = 2 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'ConfigureWindowsSpotlight';                         Value = 2 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'IncludeEnterpriseSpotlight';                        Value = 0 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'IncludeEnterpriseSpotlight';                        Value = 0 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableThirdPartySuggestions';                      Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableThirdPartySuggestions';                      Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableTailoredExperiencesWithDiagnosticData';      Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableWindowsSpotlightFeatures';                   Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsSpotlightFeatures';                   Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableWindowsSpotlightWindowsWelcomeExperience';   Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsSpotlightWindowsWelcomeExperience';   Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableWindowsSpotlightOnActionCenter';             Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsSpotlightOnActionCenter';             Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\CloudContent';         Name = 'DisableWindowsSpotlightOnSettings';                 Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsSpotlightOnSettings';                 Value = 1 }
-
-    # Machine-level cloud content
     @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableTailoredExperiencesWithDiagnosticData'; Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableCloudOptimizedContent';                 Value = 1 }
 )
+$CloudUserPaths = @('HKCU:\Software\Policies\Microsoft\Windows\CloudContent','HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\CloudContent')
+$CloudUserTweaks = @{
+    ConfigureWindowsSpotlight                       = 2
+    IncludeEnterpriseSpotlight                      = 0
+    DisableThirdPartySuggestions                    = 1
+    DisableTailoredExperiencesWithDiagnosticData    = 1
+    DisableWindowsSpotlightFeatures                 = 1
+    DisableWindowsSpotlightWindowsWelcomeExperience = 1
+    DisableWindowsSpotlightOnActionCenter           = 1
+    DisableWindowsSpotlightOnSettings               = 1
+}
+foreach ($p in $CloudUserPaths) { Set-Tweaks -Path $p -Settings $CloudUserTweaks }
 
-# ── 5.5  privacy — internet communication restrictions ──────
-Write-Step 'privacy & internet communication'
+# ── 1.28  content delivery manager (cdm)
+Write-Step 'content delivery manager'
+$CdmBase = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+$CdmDef  = 'HKU:\.DEFAULT\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+$CdmOff  = @{
+    ContentDeliveryAllowed            = 0; SubscribedContentEnabled          = 0
+    'SubscribedContent-310093Enabled' = 0; SoftLandingEnabled                = 0
+    'SubscribedContent-338389Enabled' = 0; SilentInstalledAppsEnabled        = 0
+    PreInstalledAppsEnabled           = 0; PreInstalledAppsEverEnabled       = 0
+    OemPreInstalledAppsEnabled        = 0; FeatureManagementEnabled          = 0
+    RemediationRequired               = 0; 'SubscribedContent-314559Enabled' = 0
+    'SubscribedContent-280815Enabled' = 0; 'SubscribedContent-314563Enabled' = 0
+    'SubscribedContent-202914Enabled' = 0; 'SubscribedContent-338387Enabled' = 0
+    'SubscribedContent-280810Enabled' = 0; 'SubscribedContent-280811Enabled' = 0
+    RotatingLockScreenEnabled         = 0; RotatingLockScreenOverlayEnabled  = 0
+}
+Set-Tweaks -Path $CdmBase -Settings $CdmOff
+Set-Tweaks -Path $CdmDef  -Settings $CdmOff
+@(
+    "$CdmBase\Subscriptions"; "$CdmDef\Subscriptions"
+    "$CdmBase\SuggestedApps"; "$CdmDef\SuggestedApps"
+) | ForEach-Object { if (Test-Path $_) { Remove-Item -Path $_ -Recurse -Force -EA 0 } }
+
+# ── 1.29  internet communication restrictions
+Write-Step 'internet communication restrictions'
 Apply-Tweaks @(
-    # MSA optional
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'MSAOptional'; Value = 1 }
-
-    # Disable cloud text message sync
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\Messaging'; Name = 'AllowMessageSync'; Value = 0 }
-
-    # EdgeUI
     @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\EdgeUI';         Name = 'DisableHelpSticker'; Value = 1 }
     @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\EdgeUI';         Name = 'DisableMFUTracking'; Value = 1 }
     @{ Path = 'HKU:\.DEFAULT\Software\Policies\Microsoft\Windows\EdgeUI'; Name = 'DisableMFUTracking'; Value = 1 }
-
-    # Restrict Internet Communication — HKCU
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoPublishingWizard';  Value = 1 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoWebServices';       Value = 1 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoOnlinePrintsWizard'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoInternetOpenWith';  Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'; Name = 'NoGenTicket'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows NT\Printers';                   Name = 'DisableHTTPPrinting';    Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows NT\Printers';                   Name = 'DisableWebPnPDownload';  Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\HandwritingErrorReports';       Name = 'PreventHandwritingErrorReports'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\TabletPC';                      Name = 'PreventHandwritingDataSharing'; Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Assistance\Client\1.0';                 Name = 'NoOnlineAssist';      Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Assistance\Client\1.0';                 Name = 'NoExplicitFeedback';  Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\Assistance\Client\1.0';                 Name = 'NoImplicitFeedback';  Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'WebHelp';             Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'CodecDownload';       Value = 1 }
-    @{ Path = 'HKCU:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'WebPublish';          Value = 1 }
-
-    # Restrict Internet Communication — HKLM
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoPublishingWizard';  Value = 1 }
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoWebServices';       Value = 1 }
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoOnlinePrintsWizard'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer';       Name = 'NoInternetOpenWith';  Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform'; Name = 'NoGenTicket'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\PCHealth\HelpSvc';                      Name = 'Headlines';           Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\PCHealth\HelpSvc';                      Name = 'MicrosoftKBSearch';   Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\PCHealth\ErrorReporting';               Name = 'DoReport';            Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\Windows Error Reporting';       Name = 'Disabled';            Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\Internet Connection Wizard';    Name = 'ExitOnMSICW';         Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\EventViewer';                           Name = 'MicrosoftEventVwrDisableLinks'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\Registration Wizard Control';   Name = 'NoRegistration';      Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\SearchCompanion';                       Name = 'DisableContentFileUpdates'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows NT\Printers';                   Name = 'DisableHTTPPrinting';    Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows NT\Printers';                   Name = 'DisableWebPnPDownload';  Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\HandwritingErrorReports';       Name = 'PreventHandwritingErrorReports'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\TabletPC';                      Name = 'PreventHandwritingDataSharing'; Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'WebHelp';             Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'CodecDownload';       Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMovieMaker';                     Name = 'WebPublish';          Value = 1 }
-
-    # Firewall rules — block DiagTrack (telemetry) and WerSvc (error reporting) outbound
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Defaults\FirewallPolicy\FirewallRules';
-       Name = 'Block-Unified-Telemetry-Client'
-       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=DiagTrack|Name=Block-Unified-Telemetry-Client|Desc=Block-Unified-Telemetry-Client|EmbedCtxt=DiagTrack|'
-       Type = 'String' }
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Defaults\FirewallPolicy\FirewallRules';
-       Name = 'Block-Windows-Error-Reporting'
-       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=WerSvc|Name=Block-Unified-Error-Reporting|Desc=Block-Windows-Error-Reporting|EmbedCtxt=WerSvc|'
-       Type = 'String' }
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules';
-       Name = 'Block-Unified-Telemetry-Client'
-       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=DiagTrack|Name=Block-Unified-Telemetry-Client|Desc=Block-Unified-Telemetry-Client|EmbedCtxt=DiagTrack|'
-       Type = 'String' }
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules';
-       Name = 'Block-Windows-Error-Reporting'
-       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=WerSvc|Name=Block-Unified-Telemetry-Client|Desc=Block-Windows-Error-Reporting|EmbedCtxt=WerSvc|'
-       Type = 'String' }
-
-    # Disable Gaming Copilot DLL (Xbox)
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions'; Name = 'ActivationType'; Value = 4294967295 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Xbox.GamingAI.Companion.Host.GamingCompanionHostOptions'; Name = 'Server';         Value = ''; Type = 'String' }
 )
+$IcmHKCU = @{
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' = @{
+        NoPublishingWizard = 1; NoWebServices = 1; NoOnlinePrintsWizard = 1; NoInternetOpenWith = 1
+    }
+    'HKCU:\Software\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform' = @{ NoGenTicket = 1 }
+    'HKCU:\Software\Policies\Microsoft\Windows NT\Printers' = @{ DisableHTTPPrinting = 1; DisableWebPnPDownload = 1 }
+    'HKCU:\Software\Policies\Microsoft\Windows\HandwritingErrorReports' = @{ PreventHandwritingErrorReports = 1 }
+    'HKCU:\Software\Policies\Microsoft\Windows\TabletPC' = @{ PreventHandwritingDataSharing = 1 }
+    'HKCU:\Software\Policies\Microsoft\Assistance\Client\1.0' = @{ NoOnlineAssist = 1; NoExplicitFeedback = 1; NoImplicitFeedback = 1 }
+    'HKCU:\Software\Policies\Microsoft\WindowsMovieMaker' = @{ WebHelp = 1; CodecDownload = 1; WebPublish = 1 }
+}
+$IcmHKLM = @{
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' = @{
+        NoPublishingWizard = 1; NoWebServices = 1; NoOnlinePrintsWizard = 1; NoInternetOpenWith = 1
+    }
+    'HKLM:\Software\Policies\Microsoft\Windows NT\CurrentVersion\Software Protection Platform' = @{ NoGenTicket = 1 }
+    'HKLM:\Software\Policies\Microsoft\PCHealth\HelpSvc' = @{ Headlines = 0; MicrosoftKBSearch = 0 }
+    'HKLM:\Software\Policies\Microsoft\PCHealth\ErrorReporting' = @{ DoReport = 0 }
+    'HKLM:\Software\Policies\Microsoft\Windows\Windows Error Reporting' = @{ Disabled = 1 }
+    'HKLM:\Software\Policies\Microsoft\Windows\Internet Connection Wizard' = @{ ExitOnMSICW = 1 }
+    'HKLM:\Software\Policies\Microsoft\EventViewer' = @{ MicrosoftEventVwrDisableLinks = 1 }
+    'HKLM:\Software\Policies\Microsoft\Windows\Registration Wizard Control' = @{ NoRegistration = 1 }
+    'HKLM:\Software\Policies\Microsoft\SearchCompanion' = @{ DisableContentFileUpdates = 1 }
+    'HKLM:\Software\Policies\Microsoft\Windows NT\Printers' = @{ DisableHTTPPrinting = 1; DisableWebPnPDownload = 1 }
+    'HKLM:\Software\Policies\Microsoft\Windows\HandwritingErrorReports' = @{ PreventHandwritingErrorReports = 1 }
+    'HKLM:\Software\Policies\Microsoft\Windows\TabletPC' = @{ PreventHandwritingDataSharing = 1 }
+    'HKLM:\Software\Policies\Microsoft\WindowsMovieMaker' = @{ WebHelp = 1; CodecDownload = 1; WebPublish = 1 }
+}
+foreach ($path in $IcmHKCU.Keys) { Set-Tweaks -Path $path -Settings $IcmHKCU[$path] }
+foreach ($path in $IcmHKLM.Keys) { Set-Tweaks -Path $path -Settings $IcmHKLM[$path] }
 
-# ── 5.6  telemetry & data collection ────────────────────────
-Write-Step 'telemetry & data collection'
-Apply-Tweaks @(
-    # AllowTelemetry = 0 everywhere
-    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\DataCollection';                                           Name = 'AllowTelemetry';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection';                                           Name = 'AllowTelemetry';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection';                            Name = 'AllowTelemetry';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Policies\DataCollection';                Name = 'AllowTelemetry';    Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\System\AllowTelemetry';                               Name = 'value';             Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\DevicePolicy\AllowTelemetry';                   Name = 'DefaultValue';      Value = 0 }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CPSS\Store\AllowTelemetry';                          Name = 'Value';             Value = 0 }
-
-    # DataCollection policy
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowCommercialDataPipeline';                Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowDeviceNameInTelemetry';                 Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableEnterpriseAuthProxy';                 Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'MicrosoftEdgeDataOptIn';                    Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableTelemetryOptInChangeNotification';   Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DisableTelemetryOptInSettingsUx';           Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'DoNotShowFeedbackNotifications';            Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitEnhancedDiagnosticDataWindowsAnalytics'; Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowBuildPreview';                         Value = 0 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitDiagnosticLogCollection';              Value = 1 }
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\DataCollection'; Name = 'LimitDumpCollection';                       Value = 1 }
-
-    # Disable pre-release / config flighting
-    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\PreviewBuilds'; Name = 'EnableConfigFlighting'; Value = 0 }
-
-    # Disable experimentation
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\System'; Name = 'AllowExperimentation'; Value = 0 }
-
-    # wmi autologger — disable telemetry loggers
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\Diagtrack-Listener'; Name = 'Start'; Value = 0 }
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\SQMLogger';          Name = 'Start'; Value = 0 }
-    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\WMI\Autologger\SetupPlatformTel';   Name = 'Start'; Value = 0 }
-)
-
-# ── 5.7  Windows Error Reporting (WER) ──────────────────────
+# ── 1.30  windows error reporting (wer)
 Write-Step 'windows error reporting'
 $WerPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'
 $WerData   = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
 Apply-Tweaks @(
-    # policy hive
-    @{ Path = $WerPolicy; Name = 'AutoApproveOSDumps';    Value = 0 }
-    @{ Path = $WerPolicy; Name = 'LoggingDisabled';       Value = 1 }
-    @{ Path = $WerPolicy; Name = 'Disabled';              Value = 1 }
+    @{ Path = $WerPolicy; Name = 'AutoApproveOSDumps';     Value = 0 }
+    @{ Path = $WerPolicy; Name = 'LoggingDisabled';        Value = 1 }
+    @{ Path = $WerPolicy; Name = 'Disabled';               Value = 1 }
     @{ Path = $WerPolicy; Name = 'DontSendAdditionalData'; Value = 1 }
-    @{ Path = $WerPolicy; Name = 'DontShowUI';            Value = 1 }
-
-    # data hive
-    @{ Path = $WerData;   Name = 'Disabled';              Value = 1 }
-
-    # consent
-    @{ Path = 'HKLM:\Software\Microsoft\Windows\Windows Error Reporting\Consent'; Name = 'DefaultConsent';         Value = 0 }
+    @{ Path = $WerPolicy; Name = 'DontShowUI';             Value = 1 }
+    @{ Path = $WerData;   Name = 'Disabled';               Value = 1 }
+    @{ Path = 'HKLM:\Software\Microsoft\Windows\Windows Error Reporting\Consent'; Name = 'DefaultConsent';          Value = 0 }
     @{ Path = 'HKLM:\Software\Microsoft\Windows\Windows Error Reporting\Consent'; Name = 'DefaultOverrideBehavior'; Value = 1 }
-
-    # consent policy — disable all (value name '0', empty string data)
     @{ Path = "$WerPolicy\Consent"; Name = '0'; Value = ''; Type = 'String' }
+)
+
+# ── 1.31  firewall — telemetry & error reporting block
+Write-Step 'firewall rules — telemetry block'
+$FwDefaults  = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Defaults\FirewallPolicy\FirewallRules'
+$FwParams    = 'HKLM:\SYSTEM\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+Apply-Tweaks @(
+    @{ Path = $FwDefaults; Name = 'Block-Unified-Telemetry-Client'
+       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=DiagTrack|Name=Block-Unified-Telemetry-Client|Desc=Block-Unified-Telemetry-Client|EmbedCtxt=DiagTrack|'
+       Type = 'String' }
+    @{ Path = $FwDefaults; Name = 'Block-Windows-Error-Reporting'
+       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=WerSvc|Name=Block-Unified-Error-Reporting|Desc=Block-Windows-Error-Reporting|EmbedCtxt=WerSvc|'
+       Type = 'String' }
+    @{ Path = $FwParams;   Name = 'Block-Unified-Telemetry-Client'
+       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=DiagTrack|Name=Block-Unified-Telemetry-Client|Desc=Block-Unified-Telemetry-Client|EmbedCtxt=DiagTrack|'
+       Type = 'String' }
+    @{ Path = $FwParams;   Name = 'Block-Windows-Error-Reporting'
+       Value = 'v2.31|Action=Block|Active=TRUE|Dir=Out|RA42=IntErnet|RA62=IntErnet|App=%SystemRoot%\system32\svchost.exe|Svc=WerSvc|Name=Block-Unified-Telemetry-Client|Desc=Block-Windows-Error-Reporting|EmbedCtxt=WerSvc|'
+       Type = 'String' }
+)
+
+# ── 1.32 fullscreen optimization (disable)
+Write-Step 'fullscreen optimization (disable)'
+Apply-Tweaks @(
+    @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_FSEBehaviorMode';               Value = 2 }
+    @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode';      Value = 1 }
+    @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_DXGIHonorFSEWindowsCompatible'; Value = 1 }
+    @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_EFSEFeatureFlags';              Value = 0 }
+    @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_FSEBehavior';                   Value = 2 }
+)
+
+# ── 1.33 windowed optimization (disable)
+Write-Step 'windowed optimization (disable)'
+$p = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+$n = 'DirectXUserGlobalSettings'
+$cur = (Get-ItemProperty -Path $p -Name $n -EA 0).$n
+if ([string]::IsNullOrEmpty($cur)) { $new = 'SwapEffectUpgradeEnable=0;' }
+else { $new = 'SwapEffectUpgradeEnable=0;' + ($cur -replace 'SwapEffectUpgradeEnable=1;?','') }
+Set-Reg -Path $p -Name $n -Value $new -Type 'String'
+
+# ── 1.34 overlaytestmode (disable)
+Write-Step 'overlaytestmode (disable)'
+Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name 'OverlayTestMode' -Value 5
+
+# ── 1.35  prefetch optimization (ssd)
+Write-Step 'prefetch optimization (ssd)'
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters'; Name = 'EnablePrefetcher';  Value = 0 }
+    @{ Path = 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters'; Name = 'EnableSuperfetch';  Value = 0 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\EMDMgmt'; Name = 'GroupPolicyDisallowCaches';  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\EMDMgmt'; Name = 'AllowNewCachesByDefault';    Value = 0 }
+)
+
+# ── 1.36 background app toggle (disable)
+Write-Step 'background app toggle (disable)'
+Apply-Tweaks @(
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';                       Name = 'BackgroundAppGlobalToggle'; Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'; Name = 'GlobalUserDisabled';    Value = 1 }
+    @{ Path = 'HKLM:\Software\Policies\Microsoft\Windows\AppPrivacy';                         Name = 'LetAppsRunInBackground'; Value = 2 }
+)
+
+# ── 1.37 background window message rate limit
+Write-Step 'background window message rate limit'
+Apply-Tweaks @(
+    @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'RawMouseThrottleEnabled';  Value = 1 }
+    @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'RawMouseThrottleDuration'; Value = 20 }
+)
+
+# ── 1.38 branding & oem
+Write-Step 'branding & oem'
+Apply-Tweaks @(
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubManufacturer'; Value = 'Albus';     Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubstring';       Value = 'Albus';     Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubVersion';      Value = 'Albus 1.0'; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'HelpCustomized';  Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'Manufacturer';    Value = 'Albus';                                    Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportProvider'; Value = 'Albus Support';                            Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportAppURL';   Value = 'albus-support-help';                       Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportURL';      Value = 'https://www.github.com/oqullcan/albuswin'; Type = 'String' }
 )
 
 Write-Step 'registry tweaks complete' 'ok'
@@ -1614,11 +1523,16 @@ Write-Done 'registry tweaks'
 
 # ════════════════════════════════════════════════════════════
 #  PHASE 4 · SERVICES
-#  Runs after registry so Start values written above agree
-#  with what sc.exe then enforces.
 # ════════════════════════════════════════════════════════════
 
 Write-Phase 'services'
+# rdyboost → lowerfilters
+$lfPath = 'HKLM:\SYSTEM\ControlSet001\Control\Class\{71a27cdd-812a-11d0-bec7-08002be2092f}'
+$lf = (Get-ItemProperty -Path $lfPath -ErrorAction SilentlyContinue).LowerFilters
+if ($lf -contains 'rdyboost') {
+    $lf = $lf | Where-Object { $_ -ne 'rdyboost' }
+    Set-ItemProperty -Path $lfPath -Name 'LowerFilters' -Value $lf
+}
 
 $config = @(
     # telemetry & diagnostics
@@ -1635,6 +1549,7 @@ $config = @(
     @{ Name = 'PcaSvc';                                   Start = 4 }
     @{ Name = 'InventorySvc';                             Start = 4 }
     # bloat
+    @{ Name = 'WpnUserService';                           Start = 4 }
     @{ Name = 'RetailDemo';                               Start = 4 }
     @{ Name = 'MapsBroker';                               Start = 4 }
     @{ Name = 'wisvc';                                    Start = 4 }
@@ -1655,10 +1570,9 @@ $config = @(
     @{ Name = 'CDPUserSvc';                               Start = 4 }
     @{ Name = 'TrkWks';                                   Start = 4 }
     # superfluous
+    @{ Name = 'RdyBoost';                                 Start = 4 }
     @{ Name = 'SysMain';                                  Start = 4 }
     @{ Name = 'dam';                                      Start = 4 }
-    @{ Name = 'amdfendr';                                 Start = 4 }
-    @{ Name = 'amdfendrmgr';                              Start = 4 }
     # condrv needs auto
     @{ Name = 'condrv';                                   Start = 2 }
 )
@@ -1670,10 +1584,10 @@ foreach ($svc in $config) {
         ForEach-Object {
             $matchedName = $_.PSChildName
             if ($svc.Start -eq 4) {
-                sc.exe stop $matchedName >$null 2>&1
+                sc.exe stop $matchedName | Out-Null
             }
             $startType = switch ($svc.Start) { 2 { 'auto' } 3 { 'demand' } 4 { 'disabled' } }
-            sc.exe config $matchedName start= $startType >$null 2>&1
+            sc.exe config $matchedName start= $startType | Out-Null
             Set-Reg $_.PSPath 'Start' $svc.Start
         }
 }
@@ -1694,43 +1608,32 @@ Write-Done 'services'
 
 Write-Phase 'scheduled tasks'
 
-$tasks = @(
-    '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser',
-    '\Microsoft\Windows\Application Experience\ProgramDataUpdater',
-    '\Microsoft\Windows\Application Experience\StartupAppTask',
-    '\Microsoft\Windows\Application Experience\PcaPatchDbTask',
-    '\Microsoft\Windows\AppxDeploymentClient\UCPD Velocity',
-    '\Microsoft\Windows\Autochk\Proxy',
-    '\Microsoft\Windows\Customer Experience Improvement Program\Consolidator',
-    '\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip',
-    '\Microsoft\Windows\Customer Experience Improvement Program\Uploader',
-    '\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector',
-    '\Microsoft\Windows\Windows Defender\Windows Defender Cache Maintenance',
-    '\Microsoft\Windows\Windows Defender\Windows Defender Cleanup',
-    '\Microsoft\Windows\Windows Defender\Windows Defender Scheduled Scan',
-    '\Microsoft\Windows\Windows Defender\Windows Defender Verification',
-    '\Microsoft\Windows\Flighting\FeatureConfig\UsageDataReporting',
-    '\Microsoft\Windows\Defrag\ScheduledDefrag',
-    '\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem',
-    '\Microsoft\Windows\Feedback\Siuf\DmClient',
-    '\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload',
-    '\Microsoft\Windows\Maintenance\WinSAT',
-    '\Microsoft\Windows\Maps\MapsUpdateTask',
-    '\Microsoft\Windows\Maps\MapsToastTask',
-    '\Microsoft\Windows\SettingSync\BackgroundUploadTask',
-    '\Microsoft\Windows\SettingSync\NetworkStateChangeTask',
-    '\Microsoft\Windows\CloudExperienceHost\CreateObjectTask',
-    '\Microsoft\Windows\DiskFootprint\Diagnostics',
-    '\Microsoft\Windows\WDI\ResolutionHost',
-    '\Microsoft\Windows\PI\Sqm-Tasks'
+$paths = @(
+    '\Microsoft\Windows\Application Experience\',
+    '\Microsoft\Windows\AppxDeploymentClient\',
+    '\Microsoft\Windows\Autochk\',
+    '\Microsoft\Windows\Customer Experience Improvement Program\',
+    '\Microsoft\Windows\DiskDiagnostic\',
+    # '\Microsoft\Windows\Windows Defender\',
+    '\Microsoft\Windows\Flighting\',
+    '\Microsoft\Windows\Defrag\',
+    '\Microsoft\Windows\Power Efficiency Diagnostics\',
+    '\Microsoft\Windows\Feedback\',
+    '\Microsoft\Windows\Maintenance\',
+    '\Microsoft\Windows\Maps\',
+    '\Microsoft\Windows\SettingSync\',
+    '\Microsoft\Windows\CloudExperienceHost\',
+    '\Microsoft\Windows\DiskFootprint\',
+    '\Microsoft\Windows\WindowsAI\',
+    '\Microsoft\Windows\WDI\',
+    '\Microsoft\Windows\PI\'
 )
 
-$dtasks = ($tasks | ForEach-Object { [regex]::Escape($_) }) -join '|'
-$Pattern = "(?i)^($dtasks)$"
-
-Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-    $_.URI -match $Pattern -and $_.State -ne 'Disabled'
-} | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+foreach ($path in $paths) {
+    Get-ScheduledTask -TaskPath $path -ErrorAction SilentlyContinue |
+    Where-Object { $_.State -ne 'Disabled' } |
+    Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+}
 
 Write-Step 'scheduled tasks disabled' 'ok'
 Write-Done 'scheduled tasks'
@@ -1741,7 +1644,7 @@ Write-Done 'scheduled tasks'
 
 Write-Phase 'network configuration'
 
-$Tcp = @(
+$tcp = @(
     'autotuninglevel=restricted',
     'ecncapability=disabled',
     'timestamps=disabled',
@@ -1750,18 +1653,18 @@ $Tcp = @(
     'rsc=disabled',
     'nonsackrttresiliency=disabled'
 )
-foreach ($cmd in $Tcp) { netsh int tcp set global $cmd | Out-Null }
+foreach ($cmd in $tcp) { netsh int tcp set global $cmd | Out-Null }
 
 netsh int tcp set supplemental template=internet congestionprovider=cubic | Out-Null
 
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\QoS' 'Do not use NLA' '1' 'String'
 Remove-NetQosPolicy -Name 'Albus_*' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 
-$Games = @(
+$games = @(
     'cs2.exe',
     'r5apex.exe'
 )
-foreach ($Game in $Games) {
+foreach ($Game in $games) {
     $Name = "albus_QoS_$($Game.Replace('.exe', ''))"
     New-NetQosPolicy -Name $Name -AppPathNameMatchCondition $Game -DSCPAction 46 -NetworkProfile All -ErrorAction SilentlyContinue | Out-Null
 }
@@ -1771,7 +1674,7 @@ if ($ActiveNICs) {
     $ActiveNICs | Disable-NetAdapterLso -IPv4 -ErrorAction SilentlyContinue | Out-Null
     $ActiveNICs | Set-NetAdapterAdvancedProperty -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -ErrorAction SilentlyContinue | Out-Null
 
-    $Bloat = @('ms_lldp', 'ms_lltdio', 'ms_implat', 'ms_rspndr', 'ms_tcpip6', 'ms_server', 'ms_msclient', 'ms_pacer')
+    $Bloat = @('ms_lldp', 'ms_lltdio', 'ms_implat', 'ms_rspndr', 'ms_tcpip6', 'ms_server', 'ms_msclient')
     foreach ($B in $Bloat) { $ActiveNICs | Disable-NetAdapterBinding -ComponentID $B -ErrorAction SilentlyContinue | Out-Null }
 
     $TcpParams = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
@@ -1818,18 +1721,18 @@ $UltimateGUID   = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 $AlbusGUID      = '6f71756c-6c63-616e-0101-010101010101'
 
 # reset the system and switch to the safe mode
-powercfg -restoredefaultschemes >$null 2>&1
-powercfg /setactive $PowerSaverGUID >$null 2>&1
+powercfg -restoredefaultschemes | Out-Null
+powercfg /setactive $PowerSaverGUID | Out-Null
 
 # scrap the old albus plan and start from scratch with our own design
-powercfg /delete $AlbusGUID >$null 2>&1
-powercfg /duplicatescheme $UltimateGUID $AlbusGUID >$null 2>&1
-powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak throughput.' >$null 2>&1
+powercfg /delete $AlbusGUID | Out-Null
+powercfg /duplicatescheme $UltimateGUID $AlbusGUID | Out-Null
+powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak throughput.' | Out-Null
 
 # remove all unnecessary plans except albus and powersaver
 [regex]::Matches((powercfg /l | Out-String), '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}', 'IgnoreCase') | ForEach-Object {
     if ($_.Value -notin @($AlbusGUID, $PowerSaverGUID)) {
-        powercfg /delete $_.Value >$null 2>&1
+        powercfg /delete $_.Value | Out-Null
     }
 }
 
@@ -1864,10 +1767,18 @@ powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak t
     '54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100'  # min cpu state
     '54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100'  # max cpu state
     '54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318583 100'  # core parking min cores
+    '54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318584 100'  # core parking min cores '2
     '54533251-82be-4824-96c1-47b60b740d00 ea062031-0e34-4ff1-9b6d-eb1059334028 100'  # core parking max cores
     '54533251-82be-4824-96c1-47b60b740d00 94d3a615-a899-4ac5-ae2b-e4d8f634367f 1'    # system cooling active
     '54533251-82be-4824-96c1-47b60b740d00 36687f9e-e3a5-4dbf-b1dc-15eb381c6863 0'    # energy perf pref
     '54533251-82be-4824-96c1-47b60b740d00 93b8b6dc-0698-4d1c-9ee4-0644e900c85d 0'    # heterogeneous scheduling
+    # test
+    '54533251-82be-4824-96c1-47b60b740d00 465e1f50-b610-473a-ab58-00d1077dc418 2'    # turbo boost power limit tuning
+    '54533251-82be-4824-96c1-47b60b740d00 40fbefc7-2e9d-4d25-a185-0cfd8574bac6 1'    # perf policy for turbo boost
+    '54533251-82be-4824-96c1-47b60b740d00 06cadf0e-64ed-448a-8927-ce7bf90eb35d 10'   # turbo power boost
+    '54533251-82be-4824-96c1-47b60b740d00 12a0ab44-fe28-4fa9-b3bd-4b64f44960a6 8'    # turbo power boost
+    '54533251-82be-4824-96c1-47b60b740d00 7b224883-b3cc-4d79-819f-8374152cbe7c 100'  # disable c6 states
+    '54533251-82be-4824-96c1-47b60b740d00 4b92d758-5a24-4851-a470-815d78aee119 80'   # disable c6 states
 
     # display & video playback
     '7516b95f-f776-4464-8c53-06167f40cc99 3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e 600'  # display timeout 10m (oled safety)
@@ -1895,29 +1806,40 @@ powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak t
     'de830923-a562-41af-a086-e3a2c6bad2da e69653ca-cf7f-4f05-aa73-cb833fa90ad4 0'    # battery saver auto never
 ) | ForEach-Object {
     $parts = $_ -split '\s+'
-    powercfg /attributes $parts[0] $parts[1] -ATTRIB_HIDE >$null 2>&1
-    powercfg /setacvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] >$null 2>&1
-    powercfg /setdcvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] >$null 2>&1
+    powercfg /attributes $parts[0] $parts[1] -ATTRIB_HIDE | Out-Null
+    powercfg /setacvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] | Out-Null
+    powercfg /setdcvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] | Out-Null
 }
 
 # activate the albus plan
-powercfg /setactive $AlbusGUID >$null 2>&1
+powercfg /setactive $AlbusGUID | Out-Null
 
 # disable hibernate
-powercfg /hibernate off >$null 2>&1
+powercfg /hibernate off | Out-Null
 $PwrKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power'
 Set-Reg $PwrKey 'HibernateEnabled' 0
 Set-Reg $PwrKey 'HibernateEnabledDefault' 0
 
 # disable fast boot
-Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name 'HiberbootEnabled' -Value 0
+Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power'     -Name 'HiberbootEnabled' -Value 0
+Set-Reg -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'             -Name 'HiberbootEnabled' -Value 0
 
 # disable power throttling
 $ThrottleKey = "$PwrKey\PowerThrottling"
 if (-not (Test-Path $ThrottleKey)) { New-Item -Path $ThrottleKey -Force | Out-Null }
 Set-Reg $ThrottleKey 'PowerThrottlingOff' 1
 
-# ui: disable sleep and lock options in start menu
+# disable modern standby
+Set-Reg -Path 'HKLM:\System\CurrentControlSet\Control\Power' -Name 'PlatformAoAcOverride' -Value 0
+
+# disable usage reporting
+wevtutil sl 'Microsoft-Windows-SleepStudy/Diagnostic'               /q:false
+wevtutil sl 'Microsoft-Windows-Kernel-Processor-Power/Diagnostic'   /q:false
+wevtutil sl 'Microsoft-Windows-UserModePowerService/Diagnostic'      /q:false
+Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' -Name 'SleepStudyDisabled' -Value 1
+
+# disable sleep and lock options in start menu
 $FlyoutKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings'
 if (-not (Test-Path $FlyoutKey)) { New-Item -Path $FlyoutKey -Force | Out-Null }
 Set-Reg $FlyoutKey 'ShowLockOption' 0
@@ -1926,10 +1848,7 @@ Set-Reg $FlyoutKey 'ShowSleepOption' 0
 Write-Step "albus power plan active [$AlbusGUID]" 'ok'
 Write-Done 'power plan'
 
-# ════════════════════════════════════════════════════════════
 #  PHASE 8 · HARDWARE TUNING
-#  MSI mode, ghost devices, disk cache, device power
-# ════════════════════════════════════════════════════════════
 
 Write-Phase 'hardware tuning'
 
@@ -1999,11 +1918,25 @@ foreach ($proc in $CriticalProcs) {
 Set-Reg $KernelPath 'MitigationOptions' $mitigPayload 'Binary'
 Set-Reg $KernelPath 'MitigationAuditOptions' $mitigPayload 'Binary'
 
+# meltdown & spectre
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettings' -Value 1
+$cur = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -EA 0).FeatureSettingsOverride
+if ($null -eq $cur) { $cur = 0 }
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettingsOverride'     -Value $new
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettingsOverrideMask' -Value $new
+
+# downfall
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettings' -Value 1
+$cur = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -EA 0).FeatureSettingsOverride
+if ($null -eq $cur) { $cur = 0 }
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettingsOverride'     -Value $new
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'FeatureSettingsOverrideMask' -Value $new
+
 # intel tsx (transaction synchronization extensions)
-if ((Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue).Manufacturer -match 'Intel') {
+if ((Get-CimInstance Win32_Processor -EA 0).Manufacturer -match 'Intel') {
     Set-Reg $KernelPath 'DisableTSX' 0
 } else {
-    Remove-ItemProperty -Path $KernelPath -Name 'DisableTSX' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $KernelPath -Name 'DisableTSX' -EA 0
 }
 
 Write-Done 'hardware tuning'
@@ -2018,6 +1951,7 @@ Write-Step 'ntfs'
 fsutil behavior set disable8dot3 1 | Out-Null
 fsutil behavior set disabledeletenotify 0 | Out-Null
 fsutil behavior set disablelastaccess 1 | Out-Null
+fsutil behavior set memoryusage 1 | Out-Null
 
 Write-Step 'bcdedit'
 bcdedit /timeout 10 | Out-Null
@@ -2061,7 +1995,7 @@ $SrcURL   = 'https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main
 
 if (Get-Service $SvcName -ErrorAction SilentlyContinue) {
     Stop-Service $SvcName -Force -ErrorAction SilentlyContinue
-    sc.exe delete $SvcName >$null 2>&1
+    sc.exe delete $SvcName | Out-Null
     Start-Sleep 1
 }
 Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
@@ -2075,7 +2009,7 @@ if ((Test-Path $CSPath) -and (Test-Path $CSC)) {
     Write-Step 'compiling albusx'
     & $CSC -r:System.ServiceProcess.dll -r:System.Configuration.Install.dll `
            -r:System.Management.dll -r:Microsoft.Win32.Registry.dll `
-           -out:"$ExePath" "$CSPath" >$null 2>&1
+           -out:"$ExePath" "$CSPath" | Out-Null
     Remove-Item $CSPath -Force -ErrorAction SilentlyContinue
 }
 
@@ -2083,7 +2017,7 @@ if (Test-Path $ExePath) {
     New-Service -Name $SvcName -BinaryPathName $ExePath -DisplayName 'AlbusX' `
         -Description 'albus core engine 3.0 — precision timer, audio latency, memory, interrupt affinity.' `
         -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
-    sc.exe failure $SvcName reset= 60 actions= restart/5000/restart/10000/restart/30000 >$null 2>&1
+    sc.exe failure $SvcName reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
     Start-Service $SvcName -ErrorAction SilentlyContinue
     Write-Step 'albusx running' 'ok'
 } else {
@@ -2124,11 +2058,6 @@ Write-Phase 'startup cleanup'
   "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp") | ForEach-Object {
     if (Test-Path $_) { Remove-Item "$_\*" -Recurse -Force -ErrorAction SilentlyContinue }
 }
-
-$taskTree = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree'
-Get-ChildItem $taskTree -ErrorAction SilentlyContinue |
-    Where-Object { $_.PSChildName -ne 'Microsoft' } |
-    ForEach-Object { Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Step 'startup entries cleared' 'ok'
 Write-Done 'startup cleanup'
