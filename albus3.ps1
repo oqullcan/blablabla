@@ -1,13 +1,7 @@
-# ============================================================
-#  ALBUS PLAYBOOK v3.0
-#  github.com/oqullcan/albuswin
-#
-#  architecture  : single-script, phase-driven
-#  philosophy    : minimal surface, maximum intent
-#  target        : windows 11 24h2+ / 2027 ready
-#  execution     : phases run top-to-bottom, each self-contained
-#  author        : oqullcan
-# ============================================================
+
+#  ── ogulcan yetim - albus playbook
+#  ── https://www.github.com/oqullcan/albuswin
+#  ── https://www.x.com/oqullcn
 
 #  ── bootstrap ─────────────────────────────────────────
 
@@ -34,7 +28,7 @@ try {
 } catch { }
 
 $HKCU_ROOT = if ($script:ActiveSID) { "HKEY_USERS\$script:ActiveSID" } else { "HKEY_CURRENT_USER" }
-$HKCU_PS = if ($script:ActiveSID) { "Registry::HKEY_USERS\$script:ActiveSID" } else { "HKCU:" }
+$HKCU_PS =   if ($script:ActiveSID) { "Registry::HKEY_USERS\$script:ActiveSID" } else { "HKCU:" }
 
 # ── logging & ui ──────────────────────────────────────
 
@@ -275,7 +269,7 @@ Stop-Service -Name 'camsvc' -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:ProgramData\Microsoft\Windows\CapabilityAccessManager\CapabilityConsentStorage.db*" -Force -ErrorAction SilentlyContinue
 
 Write-Done 'system preparation'
-
+<#
 # ════════════════════════════════════════════════════════════
 #  PHASE 2 · SOFTWARE INSTALLATION
 
@@ -737,8 +731,7 @@ Apply-Tweaks @(
 # ── 1.10  ease of access — purge & disable
 Write-Step 'ease of access purge'
 $AccHives = @(
-    'AudioDescription','Blind Access','HighContrast','Keyboard Preference','Keyboard Response','MouseKeys',
-    'On','ShowSounds','SlateLaunch','SoundSentry','StickyKeys','TimeOut','ToggleKeys'
+    'AudioDescription','Blind Access','HighContrast','Keyboard Preference','Keyboard Response','MouseKeys','On','ShowSounds','SlateLaunch','SoundSentry','StickyKeys','TimeOut','ToggleKeys'
 )
 foreach ($h in $AccHives) {
     Set-Reg -Path "HKCU:\Control Panel\Accessibility\$h"         -Name 'Flags' -Value '0' -Type 'String'
@@ -747,8 +740,7 @@ foreach ($h in $AccHives) {
 
 # ── 1.11  typing & autocorrect
 Write-Step 'typing & input'
-$TypingKeys = @('EnableAutocorrection','EnableSpellchecking','EnableTextPrediction',
-                'EnablePredictionSpaceInsertion','EnableDoubleTapSpace')
+$TypingKeys = @('EnableAutocorrection','EnableSpellchecking','EnableTextPrediction','EnablePredictionSpaceInsertion','EnableDoubleTapSpace')
 foreach ($k in $TypingKeys) {
     Set-Reg -Path 'HKCU:\SOFTWARE\Microsoft\TabletTip\1.7' -Name $k -Value 0
     Set-Reg -Path 'HKLM:\SOFTWARE\Microsoft\TabletTip\1.7' -Name $k -Value 0
@@ -862,8 +854,8 @@ Apply-Tweaks @(
     @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'TaskbarAnimations'; Value = 0 }
     @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarAnimations'; Value = 0 }
     # search icon only (no box)
-    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'SearchboxTaskbarMode'; Value = 1 }
-    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; Value = 1 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search';         Name = 'SearchboxTaskbarMode'; Value = 0 }
+    @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'SearchboxTaskbarMode'; Value = 0 }
     # hide task view button
     @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';         Name = 'ShowTaskViewButton'; Value = 0 }
     @{ Path = 'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowTaskViewButton'; Value = 0 }
@@ -1077,22 +1069,8 @@ Apply-Tweaks @(
 )
 
 # ── 1.21  performance — ifeo & process priorities
-Write-Step 'ifeo — telemetry kill & process priorities'
-$Taskkill = '%windir%\System32\taskkill.exe'
+Write-Step 'ifeo — process priorities'
 $IfeoBase = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
-
-# redirect telemetry / adware processes to taskkill
-@(
-    'CompatTelRunner.exe'   # ceip telemetry
-    'AggregatorHost.exe'    # ceip aggregator
-    'DeviceCensus.exe'      # webcam telemetry
-    'FeatureLoader.exe'     # ms pc manager spread
-    'BingChatInstaller.exe' # bing pop-up ads
-    'BGAUpsell.exe'         # bing pop-up ads
-    'BCILauncher.exe'       # Bing pop-up ads
-) | ForEach-Object {
-    Set-Reg -Path "$IfeoBase\$_" -Name 'Debugger' -Value $Taskkill -Type 'String'
-}
 
 # cpu / io priority adjustments for background processes
 Apply-Tweaks @(
@@ -1596,7 +1574,7 @@ Apply-Tweaks @(
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}'; Value = ''; Type = 'String' }
 )
 
-# start menu — windows 11 only
+# start menu
 Write-Step 'configuring start menu'
 $start2 = "$env:LOCALAPPDATA\Packages\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\LocalState\start2.bin"
 Remove-Item $start2 -Force -ErrorAction SilentlyContinue
@@ -1891,7 +1869,7 @@ function Copy-RegistryKey {
 
 Write-Step 'building albus plan structure'
 Copy-RegistryKey "$PowerBase\$SourceGUID" "$PowerBase\$AlbusGUID"
-Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'FriendlyName' -Value 'Albus 6.2'                                         -Type String -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'FriendlyName' -Value 'albus 6.2'                                         -Type String -ErrorAction SilentlyContinue
 Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'Description'  -Value 'minimal latency, unparked cores, peak throughput.' -Type String -ErrorAction SilentlyContinue
 
 # remove all unnecessary plans
@@ -1989,7 +1967,6 @@ Set-Reg $PwrKey 'HibernateEnabledDefault' 0
 # fast boot
 Write-Step 'disabling fast boot'
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0
-Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power'     'HiberbootEnabled' 0
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'             'HiberbootEnabled' 0
 
 # power throttling
@@ -2135,10 +2112,6 @@ if ((Get-CimInstance Win32_Processor -EA 0).Manufacturer -match 'Intel') {
 
 Write-Done 'hardware tuning'
 
-# ════════════════════════════════════════════════════════════
-#  PHASE 9 · FILESYSTEM & BOOT
-# ════════════════════════════════════════════════════════════
-
 Write-Phase 'filesystem & boot'
 
 Write-Step 'ntfs'
@@ -2173,11 +2146,7 @@ Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Network\MSIServer' '' 'Serv
 
 Write-Done 'filesystem & boot'
 
-# ════════════════════════════════════════════════════════════
 #  PHASE 10 · ALBUSX SERVICE
-#  Compile & deploy the core engine last — it depends on all
-#  previous phases having completed successfully.
-# ════════════════════════════════════════════════════════════
 
 Write-Phase 'albusx service'
 
@@ -2262,9 +2231,8 @@ try {
     Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
         $_.State -eq 'Installed'             -and
         $_.Name -notlike '*Ethernet*'        -and
-        $_.Name -notlike '*MSPaint*'         -and
+        $_.Name -notlike '*WiFi*'            -and
         $_.Name -notlike '*Notepad*'         -and
-        $_.Name -notlike '*Wifi*'            -and
         $_.Name -notlike '*NetFX3*'          -and
         $_.Name -notlike '*VBSCRIPT*'        -and
         $_.Name -notlike '*WMIC*'            -and
@@ -2293,61 +2261,250 @@ try {
     }
 } catch {}
 
-# edge
+#>
+# ── edge ──────────────────────────────────────────────────
 Write-Step 'removing microsoft edge'
-$OldRegion = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -ErrorAction SilentlyContinue
-Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -Value 244 -Force -ErrorAction SilentlyContinue
 
-@('backgroundTaskHost','Copilot','CrossDeviceResume','GameBar','MicrosoftEdgeUpdate',
-  'msedge','msedgewebview2','OneDrive','OneDrive.Sync.Service','OneDriveStandaloneUpdater',
-  'Resume','RuntimeBroker','Search','SearchHost','Setup','StoreDesktopExtension',
-  'WidgetService','Widgets') | ForEach-Object { Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue }
-Get-Process | Where-Object { $_.ProcessName -like '*edge*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+function Invoke-EdgeUninstallProcess {
+    param([string]$Key)
+    $baseKey      = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate'
+    $registryPath = "$baseKey\ClientState\$Key"
+    if (!(Test-Path $registryPath)) { Write-Step "edge registry key not found: $Key" 'warn'; return }
 
-@('HKCU:\SOFTWARE','HKLM:\SOFTWARE','HKCU:\SOFTWARE\Policies','HKLM:\SOFTWARE\Policies',
-  'HKCU:\SOFTWARE\WOW6432Node','HKLM:\SOFTWARE\WOW6432Node',
-  'HKCU:\SOFTWARE\WOW6432Node\Policies','HKLM:\SOFTWARE\WOW6432Node\Policies') | ForEach-Object {
-    Remove-Item "$_\Microsoft\EdgeUpdate" -Recurse -Force -ErrorAction SilentlyContinue
-}
+    Remove-ItemProperty -Path $registryPath -Name 'experiment_control_labels' -ErrorAction SilentlyContinue | Out-Null
 
-@('LocalApplicationData','ProgramFilesX86','ProgramFiles') | ForEach-Object {
-    $root = [Environment]::GetFolderPath($_)
-    Get-ChildItem "$root\Microsoft\EdgeUpdate\*.*.*.*\MicrosoftEdgeUpdate.exe" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        Start-Process -Wait $_.FullName -ArgumentList '/unregsvc' -WindowStyle Hidden
-        Start-Process -Wait $_.FullName -ArgumentList '/uninstall' -WindowStyle Hidden
+    try {
+        $folderPath = "$env:SystemRoot\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe"
+        if (!(Test-Path $folderPath)) { New-Item -ItemType Directory -Path $folderPath -Force | Out-Null }
+        New-Item -ItemType File -Path $folderPath -Name 'MicrosoftEdge.exe' -Force | Out-Null
+    } catch { Write-Step "failed to create fake microsoftedge.exe: $_" 'warn'; return }
+
+    $env:windir           = ''
+    $uninstallString      = (Get-ItemProperty -Path $registryPath -EA SilentlyContinue).UninstallString
+    $uninstallArguments   = (Get-ItemProperty -Path $registryPath -EA SilentlyContinue).UninstallArguments
+
+    if ([string]::IsNullOrEmpty($uninstallString) -or [string]::IsNullOrEmpty($uninstallArguments)) {
+        Write-Step "cannot find uninstall string for $Key" 'warn'; return
+    }
+
+    $uninstallArguments += ' --force-uninstall --delete-profile'
+    if (!(Test-Path $uninstallString)) { Write-Step "setup.exe not found: $uninstallString" 'warn'; return }
+
+    $spoofPath = "$env:SystemRoot\ImmersiveControlPanel\sihost.exe"
+    try {
+        Copy-Item "$env:SystemRoot\System32\cmd.exe" -Destination $spoofPath -Force
+        $process = Start-Process -FilePath $spoofPath -ArgumentList "/c `"$uninstallString`" $uninstallArguments" -Wait -NoNewWindow -PassThru
+        Write-Step "edge uninstall exit code: $($process.ExitCode)" 'ok'
+    } catch {
+        Write-Step "edge uninstall failed: $_" 'fail'
+    } finally {
+        Remove-Item $spoofPath -Force -ErrorAction SilentlyContinue
     }
 }
 
-try {
-    $edgeKey = Get-Item 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge' -ErrorAction SilentlyContinue
-    if ($edgeKey) {
-        $uString = $edgeKey.GetValue('UninstallString') + ' --force-uninstall'
-        Start-Process cmd.exe -ArgumentList "/c $uString" -WindowStyle Hidden -Wait
+function Remove-Edge {
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge' `
+        -Name 'NoRemove' -ErrorAction SilentlyContinue | Out-Null
+    [Microsoft.Win32.Registry]::SetValue(
+        'HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdateDev',
+        'AllowUninstall', 1, [Microsoft.Win32.RegistryValueKind]::DWord) | Out-Null
+
+    Invoke-EdgeUninstallProcess -Key '{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'
+
+    @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+      "$env:PUBLIC\Desktop",
+      "$env:USERPROFILE\Desktop") | ForEach-Object {
+        $lnk = Join-Path $_ 'Microsoft Edge.lnk'
+        if (Test-Path $lnk) { Remove-Item $lnk -Force -ErrorAction SilentlyContinue }
     }
-} catch {}
-
-@(
-    "$env:SystemRoot\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe"
-    "$env:ProgramFiles (x86)\Microsoft"
-    "$env:SystemDrive\Windows\System32\config\systemprofile\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"
-) | ForEach-Object { if (Test-Path $_) { Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue } }
-
-Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Edge' } | ForEach-Object {
-    sc.exe stop $_.Name *>$null
-    sc.exe delete $_.Name *>$null
 }
 
-if ($OldRegion) {
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\DeviceRegion' -Name DeviceRegion -Value $OldRegion -Force -ErrorAction SilentlyContinue
+function Remove-WebView {
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft EdgeWebView' `
+        -Name 'NoRemove' -ErrorAction SilentlyContinue | Out-Null
+    Invoke-EdgeUninstallProcess -Key '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 }
 
-# onedrive
+function Remove-EdgeUpdate {
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge Update' `
+        -Name 'NoRemove' -ErrorAction SilentlyContinue | Out-Null
+    $registryPath   = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate'
+    $uninstallCmd   = (Get-ItemProperty -Path $registryPath -EA SilentlyContinue).UninstallCmdLine
+    if ([string]::IsNullOrEmpty($uninstallCmd)) { Write-Step 'edge update uninstall string not found' 'warn'; return }
+    Start-Process cmd.exe "/c $uninstallCmd" -WindowStyle Hidden -Wait
+}
+
+Remove-Edge
+Remove-WebView
+Remove-EdgeUpdate
+
+# ── onedrive ──────────────────────────────────────────────
 Write-Step 'removing onedrive'
-Stop-Process -Force -Name OneDrive -ErrorAction SilentlyContinue
-@("$env:SystemRoot\System32\OneDriveSetup.exe", "$env:SystemRoot\SysWOW64\OneDriveSetup.exe") | ForEach-Object {
-    if (Test-Path $_) { Start-Process -Wait $_ -ArgumentList '/uninstall' -WindowStyle Hidden }
+
+function Remove-OneDrive {
+    if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+        New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
+    }
+
+    $setupPaths       = [System.Collections.ArrayList]@()
+    $fallbackPaths    = @(
+        "$env:SystemRoot\System32\OneDriveSetup.exe",
+        "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
+    )
+
+    Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | ForEach-Object {
+        $sid = $_.PSChildName
+        if (Test-Path "HKU:\$sid\Volatile Environment") {
+            $regPath        = "HKU:\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OneDriveSetup.exe"
+            $uninstallStr   = (Get-ItemProperty -Path $regPath -EA SilentlyContinue).UninstallString
+            if (-not [string]::IsNullOrEmpty($uninstallStr)) {
+                $setupPaths.Add([System.IO.Path]::GetDirectoryName($uninstallStr)) | Out-Null
+            }
+            Remove-ItemProperty -Path "HKU:\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
+                -Name 'OneDrive' -ErrorAction SilentlyContinue
+            Remove-Item -Path $regPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $allPaths = @($setupPaths) + $fallbackPaths | Select-Object -Unique
+
+    foreach ($p in $allPaths) {
+        if (Test-Path $p) {
+            Write-Step "uninstalling onedrive from $p"
+            Start-Process -FilePath $p -ArgumentList '/uninstall' -Wait -NoNewWindow -PassThru | Out-Null
+        }
+    }
+
+    # kullanici klasorlerinden kalıntı temizle
+    Get-ChildItem "$env:SystemDrive\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $odPath  = Join-Path $_.FullName 'AppData\Local\Microsoft\OneDrive'
+        $lnkPath = Join-Path $_.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk'
+        if (Test-Path $odPath)  { Remove-Item $odPath  -Recurse -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $lnkPath) { Remove-Item $lnkPath -Force   -ErrorAction SilentlyContinue }
+    }
+
+    # explorer sidebar'dan kaldır
+    [Microsoft.Win32.Registry]::SetValue(
+        'HKEY_CLASSES_ROOT\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}',
+        'System.IsPinnedToNameSpaceTree', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
 }
-Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'OneDrive' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+
+Remove-OneDrive
+
+# ── winsxs ai & telemetry cleanup ─────────────────────────
+Write-Step 'winsxs ai & telemetry cleanup'
+
+# 1. telemetry / ai binary'lerini etkisizleştir (rename → .bak)
+$telemetryBinaries = @(
+    "$env:SystemRoot\System32\CompatTelRunner.exe"
+    "$env:SystemRoot\System32\DeviceCensus.exe"
+    "$env:SystemRoot\System32\AggregatorHost.exe"
+    "$env:SystemRoot\System32\wsqmcons.exe"
+    "$env:SystemRoot\System32\WerFault.exe"
+    "$env:SystemRoot\System32\WerFaultSecure.exe"
+    "$env:SystemRoot\System32\wermgr.exe"
+    "$env:SystemRoot\System32\DiagSvcs\DiagnosticsHub.StandardCollector.Service.exe"
+    "$env:SystemRoot\System32\omadmclient.exe"
+    "$env:SystemRoot\SysWOW64\CompatTelRunner.exe"
+    "$env:SystemRoot\SysWOW64\DeviceCensus.exe"
+)
+
+foreach ($bin in $telemetryBinaries) {
+    if (-not (Test-Path $bin)) { continue }
+    try {
+        # ownership al
+        $acl = Get-Acl $bin
+        $owner = [System.Security.Principal.NTAccount]'Administrators'
+        $acl.SetOwner($owner)
+        Set-Acl $bin $acl
+
+        # full control ver
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'Administrators','FullControl','Allow')
+        $acl.SetAccessRule($rule)
+        Set-Acl $bin $acl
+
+        # rename → .bak (silmek yerine — geri alınabilir)
+        Rename-Item $bin "$bin.bak" -Force -ErrorAction Stop
+        Write-Step "neutralized: $(Split-Path $bin -Leaf)" 'ok'
+    } catch {
+        # takeown + icacls fallback
+        $name = $bin
+        takeown /f $name /a | Out-Null
+        icacls $name /grant "Administrators:F" | Out-Null
+        try { Rename-Item $name "$name.bak" -Force -ErrorAction Stop }
+        catch { Write-Step "skipped (locked): $(Split-Path $bin -Leaf)" 'warn' }
+    }
+}
+
+# 2. DISM component cleanup — eski güncelleme artıkları + superseded paketler
+Write-Step 'dism component store cleanup'
+try {
+    $dismJobs = @(
+        '/Online /Cleanup-Image /StartComponentCleanup /ResetBase'
+        '/Online /Cleanup-Image /SPSuperseded'
+    )
+    foreach ($args in $dismJobs) {
+        # $result = Start-Process -FilePath 'dism.exe' -ArgumentList $args -Wait -NoNewWindow -HideWindow -PassThru
+        if ($result.ExitCode -eq 0) {
+            Write-Step "dism $($args.Split('/')[3].Trim()) done" 'ok'
+        } else {
+            Write-Step "dism exit: $($result.ExitCode)" 'warn'
+        }
+    }
+} catch {
+    Write-Step "dism cleanup failed: $_" 'fail'
+}
+
+# 3. DISM ile AI / telemetry capability paketlerini kaldır
+Write-Step 'removing ai & telemetry dism packages'
+$dismPackages = @(
+    'Microsoft-Windows-DiagTrack-Package*'
+    'Microsoft-Windows-Telemetry-Package*'
+    'Microsoft-Windows-CEIP-Package*'
+    'Microsoft-OneCore-ApplicationModel-Cortana*'
+    'Microsoft-Windows-AI-MachineLearning*'
+    'Microsoft-Windows-BioEnrollment-Package*'
+    'Microsoft-Windows-Holographic*'
+    'Microsoft-Windows-QuickAssist*'
+    'Microsoft-Windows-StepsRecorder*'
+    'Microsoft-Windows-WirelessDisplay-Package*'
+)
+
+foreach ($pkg in $dismPackages) {
+    try {
+        $found = dism /Online /Get-Packages /Format:Table 2>$null |
+            Where-Object { $_ -match [regex]::Escape($pkg.Replace('*','')) }
+        if (-not $found) { continue }
+
+        $found | ForEach-Object {
+            $pkgName = ($_ -split '\|')[0].Trim()
+            if ([string]::IsNullOrWhiteSpace($pkgName)) { return }
+            $r = Start-Process dism -ArgumentList "/Online /Remove-Package /PackageName:$pkgName /NoRestart /Quiet" `
+                -Wait -NoNewWindow -PassThru
+            if ($r.ExitCode -eq 0) { Write-Step "removed: $pkgName" 'ok' }
+            else { Write-Step "skip (in-use?): $pkgName" 'warn' }
+        }
+    } catch { Write-Step "package query failed: $pkg" 'warn' }
+}
+
+# 4. WinSxS içindeki telemetry manifest'lerini devre dışı bırak
+Write-Step 'disabling telemetry winsxs manifests'
+$winsxsManifests = @('*diagtrack*','*telemetry*','*ceip*','*diaghub*','*wer*') | ForEach-Object {
+    Get-ChildItem "$env:SystemRoot\WinSxS\Manifests" -Filter $_ -ErrorAction SilentlyContinue
+}
+foreach ($manifest in $winsxsManifests) {
+    try {
+        takeown /f $manifest.FullName /a | Out-Null
+        icacls $manifest.FullName /grant "Administrators:F" | Out-Null
+        Rename-Item $manifest.FullName "$($manifest.FullName).bak" -Force -ErrorAction Stop
+        Write-Step "manifest disabled: $($manifest.Name)" 'ok'
+    } catch {
+        Write-Step "manifest locked: $($manifest.Name)" 'warn'
+    }
+}
+
+Write-Step 'winsxs ai & telemetry cleanup complete' 'ok'
 
 # update health tools
 Write-Step 'removing update health tools'
@@ -2378,11 +2535,11 @@ Write-Phase 'startup cleanup'
   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce') | ForEach-Object {
     if (Test-Path $_) {
-        Get-Item $_ | ForEach-Object { 
-            $keyPath = $_.PSPath 
-            $_.GetValueNames() | ForEach-Object { 
-                Remove-ItemProperty -Path $keyPath -Name $_ -Force -ErrorAction SilentlyContinue 
-            } 
+        Get-Item $_ | ForEach-Object {
+            $keyPath = $_.PSPath
+            $_.GetValueNames() | ForEach-Object {
+                Remove-ItemProperty -Path $keyPath -Name $_ -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -2401,12 +2558,8 @@ Write-Done 'startup cleanup'
 
 Write-Phase 'cleanup'
 
-lodctr.exe /R 2>&1 | Out-Null
-
-Remove-Item "$env:USERPROFILE\AppData\Local\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:SystemRoot\Temp\*"                -Recurse -Force -ErrorAction SilentlyContinue
-
 Start-Process cleanmgr.exe -ArgumentList '/autoclean /d C:' -Wait -NoNewWindow
+Remove-Item "C:\Albus" -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Step 'temp files removed' 'ok'
 Write-Done 'cleanup'
