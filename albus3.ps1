@@ -24,7 +24,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $ALBUS_DIR     = 'C:\Albus'
 $ALBUS_LOG     = "$ALBUS_DIR\albus.log"
-$ALBUS_VERSION = '3.0'
+$ALBUS_VERSION = '6.2'
 $TODAY         = Get-Date
 
 $script:ActiveSID = $null
@@ -127,17 +127,16 @@ function Initialize-Drives {
 
 function Resolve-RegistryPath {
     param([string]$Path)
-    $clean = $Path.TrimStart('-')
-    $psPath = $clean `
-        -replace '^HKLM:', 'Registry::HKEY_LOCAL_MACHINE' `
-        -replace '^HKCU:', $HKCU_PS `
-        -replace '^HKCR:', 'Registry::HKEY_CLASSES_ROOT' `
-        -replace '^HKU:',  'Registry::HKEY_USERS'
-    $regPath = $clean `
-        -replace '^HKLM:', 'LocalMachine' `
-        -replace '^HKCU:', ($HKCU_ROOT -replace 'HKEY_CURRENT_USER', 'CurrentUser' -replace 'HKEY_USERS', 'Users') `
-        -replace '^HKCR:', 'ClassesRoot' `
-        -replace '^HKU:',  'Users'
+    $clean = $Path.TrimStart('-') -replace '^Microsoft\.PowerShell\.Core\\Registry::', '' -replace '^Registry::', ''
+    $clean = $clean -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' `
+                    -replace '^HKCU:', $HKCU_ROOT `
+                    -replace '^HKCR:', 'HKEY_CLASSES_ROOT' `
+                    -replace '^HKU:',  'HKEY_USERS'
+    $psPath = "Registry::$clean"
+    $regPath = $clean -replace '^HKEY_LOCAL_MACHINE', 'LocalMachine' `
+                      -replace '^HKEY_CURRENT_USER',  'CurrentUser' `
+                      -replace '^HKEY_CLASSES_ROOT',  'ClassesRoot' `
+                      -replace '^HKEY_USERS',         'Users'
     return $psPath, $regPath
 }
 
@@ -177,7 +176,10 @@ function Set-Reg {
 
         $key = $root.CreateSubKey($subKey)
         if ($key) {
-            $key.SetValue($Name, $Value, $regType)
+            $finalValue = $Value
+            if ($regType -eq 'DWord') { $finalValue = [int32]$Value }
+            elseif ($regType -eq 'QWord') { $finalValue = [int64]$Value }
+            $key.SetValue($Name, $finalValue, $regType)
             $key.Close()
         }
     } catch {
@@ -233,17 +235,6 @@ function Test-Network {
     return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue)
 }
 
-function Get-GitHubRelease {
-    param([string]$repo)
-    return (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -ErrorAction Stop)
-}
-
-function Get-File {
-    param([string]$Url, [string]$Out)
-    Invoke-WebRequest -Uri $Url -OutFile $Out -UseBasicParsing -ErrorAction Stop
-}
-
-
 #  ════════════════════════════════════════════════════════════
 #  execution begins
 #  ════════════════════════════════════════════════════════════
@@ -291,7 +282,7 @@ Write-Done 'system preparation'
 #  later phases execute (sequential here, could be parallelized
 #  in a future version with powershell jobs).
 # ════════════════════════════════════════════════════════════
-
+<#
 Write-Phase 'software installation'
 
 if (Test-Network) {
@@ -1510,7 +1501,7 @@ Write-Step 'branding & oem'
 Apply-Tweaks @(
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubManufacturer'; Value = 'Albus';     Type = 'String' }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubstring';       Value = 'Albus';     Type = 'String' }
-    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubVersion';      Value = 'Albus 1.0'; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; Name = 'EditionSubVersion';      Value = 'Albus 6.2'; Type = 'String' }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'HelpCustomized';  Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'Manufacturer';    Value = 'Albus';                                    Type = 'String' }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation'; Name = 'SupportProvider'; Value = 'Albus Support';                            Type = 'String' }
@@ -1520,13 +1511,14 @@ Apply-Tweaks @(
 
 Write-Step 'registry tweaks complete' 'ok'
 Write-Done 'registry tweaks'
-
+#>
 # ════════════════════════════════════════════════════════════
 #  PHASE 4 · SERVICES
 # ════════════════════════════════════════════════════════════
-
 Write-Phase 'services'
+
 # rdyboost → lowerfilters
+Write-Step 'removing rdyboost from lowerfilters'
 $lfPath = 'HKLM:\SYSTEM\ControlSet001\Control\Class\{71a27cdd-812a-11d0-bec7-08002be2092f}'
 $lf = (Get-ItemProperty -Path $lfPath -ErrorAction SilentlyContinue).LowerFilters
 if ($lf -contains 'rdyboost') {
@@ -1577,6 +1569,19 @@ $config = @(
     @{ Name = 'condrv';                                   Start = 2 }
 )
 
+$groups = @{
+    'telemetry & diagnostics' = @('DiagTrack','dmwappushservice','diagnosticshub.standardcollector.service','WerSvc','wercplsupport','DPS','WdiServiceHost','WdiSystemHost','troubleshootingsvc','diagsvc','PcaSvc','InventorySvc')
+    'bloat'                   = @('WpnUserService','RetailDemo','MapsBroker','wisvc','UCPD','GraphicsPerfSvc','Ndu','DSSvc','WSAIFabricSvc')
+    'print'                   = @('Spooler','PrintNotify')
+    'remote desktop'          = @('TermService','UmRdpService','SessionEnv')
+    'sync'                    = @('OneSyncSvc','CDPUserSvc','TrkWks')
+    'superfluous'             = @('RdyBoost','SysMain','dam')
+}
+
+foreach ($group in $groups.Keys) {
+    Write-Step "disabling $group services"
+}
+
 foreach ($svc in $config) {
     $Pattern = "^$($svc.Name)(_[a-fA-F0-9]{4,8})?$"
     Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction SilentlyContinue |
@@ -1592,8 +1597,7 @@ foreach ($svc in $config) {
         }
 }
 
-# merge svchost instances for all matching services
-Write-Step "disabling svchost splitting" "ok"
+Write-Step 'disabling svchost splitting'
 Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\*' -Name 'ImagePath' -ErrorAction SilentlyContinue |
     Where-Object { $_.ImagePath -match 'svchost\.exe' } |
     ForEach-Object {
@@ -1610,32 +1614,31 @@ Write-Done 'services'
 Write-Phase 'scheduled tasks'
 
 $paths = @(
-    Write-Step
-    '\Microsoft\Windows\Application Experience\',
-    '\Microsoft\Windows\AppxDeploymentClient\',
-    '\Microsoft\Windows\Autochk\',
-    '\Microsoft\Windows\Customer Experience Improvement Program\',
-    '\Microsoft\Windows\DiskDiagnostic\',
-    # '\Microsoft\Windows\Windows Defender\',
-    '\Microsoft\Windows\Flighting\',
-    '\Microsoft\Windows\Defrag\',
-    '\Microsoft\Windows\Power Efficiency Diagnostics\',
-    '\Microsoft\Windows\Feedback\',
-    '\Microsoft\Windows\Maintenance\',
-    '\Microsoft\Windows\Maps\',
-    '\Microsoft\Windows\SettingSync\',
-    '\Microsoft\Windows\CloudExperienceHost\',
-    '\Microsoft\Windows\DiskFootprint\',
-    '\Microsoft\Windows\WindowsAI\',
-    '\Microsoft\Windows\WDI\',
+    '\Microsoft\Windows\Application Experience\'
+    '\Microsoft\Windows\AppxDeploymentClient\'
+    '\Microsoft\Windows\Autochk\'
+    '\Microsoft\Windows\Customer Experience Improvement Program\'
+    '\Microsoft\Windows\DiskDiagnostic\'
+    '\Microsoft\Windows\Flighting\'
+    '\Microsoft\Windows\Defrag\'
+    '\Microsoft\Windows\Power Efficiency Diagnostics\'
+    '\Microsoft\Windows\Feedback\'
+    '\Microsoft\Windows\Maintenance\'
+    '\Microsoft\Windows\Maps\'
+    '\Microsoft\Windows\SettingSync\'
+    '\Microsoft\Windows\CloudExperienceHost\'
+    '\Microsoft\Windows\DiskFootprint\'
+    '\Microsoft\Windows\WindowsAI\'
+    '\Microsoft\Windows\WDI\'
     '\Microsoft\Windows\PI\'
 )
 
 foreach ($path in $paths) {
-    Write-Step "disabling scheduled tasks in $path"
+    $label = $path.Trim('\').Split('\')[-1].ToLower()
+    Write-Step "disabling $label"
     Get-ScheduledTask -TaskPath $path -ErrorAction SilentlyContinue |
-    Where-Object { $_.State -ne 'Disabled' } |
-    Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+        Where-Object { $_.State -ne 'Disabled' } |
+        Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
 }
 
 Write-Step 'scheduled tasks disabled' 'ok'
@@ -1647,6 +1650,7 @@ Write-Done 'scheduled tasks'
 
 Write-Phase 'network configuration'
 
+Write-Step 'configuring tcp/ip stack'
 $tcp = @(
     'autotuninglevel=restricted',
     'ecncapability=disabled',
@@ -1660,6 +1664,7 @@ foreach ($cmd in $tcp) { netsh int tcp set global $cmd | Out-Null }
 
 netsh int tcp set supplemental template=internet congestionprovider=cubic | Out-Null
 
+Write-Step 'tuning network quality of service'
 Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\QoS' 'Do not use NLA' '1' 'String'
 Remove-NetQosPolicy -Name 'Albus_*' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 
@@ -1672,6 +1677,7 @@ foreach ($Game in $games) {
     New-NetQosPolicy -Name $Name -AppPathNameMatchCondition $Game -DSCPAction 46 -NetworkProfile All -ErrorAction SilentlyContinue | Out-Null
 }
 
+Write-Step 'optimizing network interface settings'
 $ActiveNICs = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
 if ($ActiveNICs) {
     $ActiveNICs | Disable-NetAdapterLso -IPv4 -ErrorAction SilentlyContinue | Out-Null
@@ -1692,6 +1698,7 @@ if ($ActiveNICs) {
     }
 }
 
+Write-Step 'applying network card optimizations'
 foreach ($NIC in $ActiveNICs) {
     $SafeID  = $NIC.InstanceID -replace '\\', '\'
     $RegPath = Resolve-Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\*" -ErrorAction SilentlyContinue | Where-Object {
@@ -1709,145 +1716,181 @@ foreach ($NIC in $ActiveNICs) {
         if (Get-ItemProperty -Path $p -Name 'PnPCapabilities' -ErrorAction SilentlyContinue) { Set-Reg $p 'PnPCapabilities' 24 }
     }
 }
-Write-Done 'Network'
+
+Write-Step 'network optimizations applied' 'ok'
+Write-Done 'network configuration'
 
 # ════════════════════════════════════════════════════════════
 #  PHASE 7 · POWER PLAN
 # ════════════════════════════════════════════════════════════
+Write-Phase 'power plan'
 
-Write-Step 'configuring albus power plan'
-
+$PowerBase      = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes'
 $PowerSaverGUID = 'a1841308-3541-4fab-bc81-f71556f20b4a'
 $UltimateGUID   = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+$HighPerfGUID   = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+$AlbusGUID      = '6f71756c-6c63-616e-8000-010101010101'
 
-# cryptographic signature: "oqullcan" (hex) + 0101 padding
-$AlbusGUID      = '6f71756c-6c63-616e-0101-010101010101'
+# reset & safe base
+Write-Step 'resetting power schemes'
+powercfg.exe -restoredefaultschemes *>$null
+cmd.exe /c "powercfg /setactive $PowerSaverGUID >NUL 2>&1"
 
-# reset the system and switch to the safe mode
-powercfg -restoredefaultschemes | Out-Null
-powercfg /setactive $PowerSaverGUID | Out-Null
+# import ultimate performance silently
+Write-Step 'importing ultimate performance base'
+cmd.exe /c "powercfg /duplicatescheme $UltimateGUID >NUL 2>&1"
 
-# scrap the old albus plan and start from scratch with our own design
-powercfg /delete $AlbusGUID | Out-Null
-powercfg /duplicatescheme $UltimateGUID $AlbusGUID | Out-Null
-powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak throughput.' | Out-Null
+# remove old albus plan
+cmd.exe /c "powercfg /delete $AlbusGUID >NUL 2>&1"
+if (Test-Path "$PowerBase\$AlbusGUID") {
+    Remove-Item "$PowerBase\$AlbusGUID" -Recurse -Force -ErrorAction SilentlyContinue
+}
 
-# remove all unnecessary plans except albus and powersaver
+# determine source: ultimate or high performance
+$SourceGUID = if (Test-Path "$PowerBase\$UltimateGUID") { $UltimateGUID } else { $HighPerfGUID }
+Write-Step "base plan: $SourceGUID"
+
+# copy source plan structure to albus via registry
+function Copy-RegistryKey {
+    param([string]$Src, [string]$Dst)
+    $srcKey = Get-Item $Src -ErrorAction SilentlyContinue
+    if (-not $srcKey) { return }
+    New-Item $Dst -Force -ErrorAction SilentlyContinue | Out-Null
+    foreach ($val in $srcKey.GetValueNames()) {
+        $data = $srcKey.GetValue($val, $null, 'DoNotExpandEnvironmentNames')
+        $kind = $srcKey.GetValueKind($val)
+        Set-ItemProperty -Path $Dst -Name $val -Value $data -Type $kind -ErrorAction SilentlyContinue
+    }
+    foreach ($sub in $srcKey.GetSubKeyNames()) {
+        Copy-RegistryKey "$Src\$sub" "$Dst\$sub"
+    }
+}
+
+Write-Step 'building albus plan structure'
+Copy-RegistryKey "$PowerBase\$SourceGUID" "$PowerBase\$AlbusGUID"
+Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'FriendlyName' -Value 'Albus 6.2'                                         -Type String -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'Description'  -Value 'minimal latency, unparked cores, peak throughput.' -Type String -ErrorAction SilentlyContinue
+
+# remove all unnecessary plans
+Write-Step 'removing unnecessary power plans'
 [regex]::Matches((powercfg /l | Out-String), '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}', 'IgnoreCase') | ForEach-Object {
     if ($_.Value -notin @($AlbusGUID, $PowerSaverGUID)) {
-        powercfg /delete $_.Value | Out-Null
+        cmd.exe /c "powercfg /delete $($_.Value) >NUL 2>&1"
     }
 }
 
-$PowerSettingsPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings"
-Get-ChildItem $PowerSettingsPath -Recurse | ForEach-Object {
-    if ($_.Property -contains "Attributes") {
-        Set-ItemProperty -Path $_.PSPath -Name "Attributes" -Value 0 -ErrorAction SilentlyContinue
+# unlock all hidden power settings
+Write-Step 'unlocking hidden power settings'
+Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Property -contains 'Attributes') {
+        Set-ItemProperty -Path $_.PSPath -Name 'Attributes' -Value 0 -ErrorAction SilentlyContinue
     }
 }
 
-# albus plan config
-# format: "subgroupguid - settingguid - value"
-@(
-    # hard disk & background
-    '0012ee47-9041-4b5d-9b77-535fba8b1442 6738e2c4-e8a5-4a42-b16a-e040e769756e 0'    # disk turn off (never)
-    '0d7dbae2-4294-402a-ba8e-26777e8488cd 309dce9b-bef4-4119-9921-a851fb12f0f4 1'    # desktop slideshow paused
+# apply albus power settings directly via registry
+Write-Step 'applying albus power settings'
 
-    # wireless & networking
-    '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'    # wireless max perf
-
-    # sleep & wake
-    '238c9fa8-0aad-41ed-83f4-97be242c8f20 29f6c1db-86da-48c5-9fdb-f2b67b1f44da 0'    # sleep after 0
-    '238c9fa8-0aad-41ed-83f4-97be242c8f20 94ac6d29-73ce-41a6-809f-6363ba21b47e 0'    # hybrid sleep off
-    '238c9fa8-0aad-41ed-83f4-97be242c8f20 9d7815a6-7ee4-497e-8888-515a05f02364 0'    # hibernate after 0
-    '238c9fa8-0aad-41ed-83f4-97be242c8f20 bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d 0'    # wake timers disable
-
-    # usb configuration
-    '2a737441-1930-4402-8d77-b2bebba308a3 0853a681-27c8-4100-a2fd-82013e970683 0'    # hub selective suspend timeout 0
-    '2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0'    # usb selective suspend off
-    '2a737441-1930-4402-8d77-b2bebba308a3 d4e98f31-5ffe-4ce1-be31-1b38b384c009 0'    # usb 3 link power management off
-
-    # power buttons & lid
-    '4f971e89-eebd-4455-a8de-9e59040e7347 a7066653-8d6c-40a8-910e-a1f54b84c7e5 2'    # power button = shutdown
-
-    # pci express
-    '501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0'    # pcie link state off
-
-    # processor power management (unparked cores & max freq)
-    '54533251-82be-4824-96c1-47b60b740d00 893dee8e-2bef-41e0-89c6-b55d0929964c 100'  # min cpu state
-    '54533251-82be-4824-96c1-47b60b740d00 bc5038f7-23e0-4960-96da-33abaf5935ec 100'  # max cpu state
-    '54533251-82be-4824-96c1-47b60b740d00 0cc5b647-c1df-4637-891a-dec35c318583 100'  # core parking min cores
-    '54533251-82be-4824-96c1-47b60b740d00 ea062031-0e34-4ff1-9b6d-eb1059334028 100'  # core parking max cores
-    '54533251-82be-4824-96c1-47b60b740d00 94d3a615-a899-4ac5-ae2b-e4d8f634367f 1'    # system cooling active
-    '54533251-82be-4824-96c1-47b60b740d00 36687f9e-e3a5-4dbf-b1dc-15eb381c6863 0'    # energy perf pref
-    '54533251-82be-4824-96c1-47b60b740d00 93b8b6dc-0698-4d1c-9ee4-0644e900c85d 0'    # heterogeneous scheduling
-
-    # display & video playback
-    '7516b95f-f776-4464-8c53-06167f40cc99 3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e 600'  # display timeout 10m (oled safety)
-    '7516b95f-f776-4464-8c53-06167f40cc99 aded5e82-b909-4619-9949-f5d71dac0bcb 100'  # display brightness
-    '7516b95f-f776-4464-8c53-06167f40cc99 f1fbfde2-a960-4165-9f88-50667911ce96 100'  # dimmed display brightness
-    '7516b95f-f776-4464-8c53-06167f40cc99 fbd9aa66-9553-4097-ba44-ed6e9d65eab8 0'    # adaptive brightness off
-    '9596fb26-9850-41fd-ac3e-f7c3c00afd4b 10778347-1370-4ee0-8bbd-33bdacaade49 1'    # video playback quality bias
-    '9596fb26-9850-41fd-ac3e-f7c3c00afd4b 34c7b99f-9a6d-4b3c-8dc7-b6693b78cef4 0'    # optimize video quality
-
-    # graphics power states
-    '44f3beca-a7c0-460e-9df2-bb8b99e0cba6 3619c3f2-afb2-4afc-b0e9-e7fef372de36 2'    # intel graphics max perf
-    'c763b4ec-0e50-4b6b-9bed-2b92a6ee884e 7ec1751b-60ed-4588-afb5-9819d3d77d90 3'    # amd power slider best perf
-    'f693fb01-e858-4f00-b20f-f30e12ac06d6 191f65b5-d45c-4a4f-8aae-1ab8bfd980e6 1'    # ati graphics max perf
-    'e276e160-7cb0-43c6-b20b-73f5dce39954 a1662ab2-9d34-4e53-ba8b-2639b9e20857 3'    # Switchable dynamic max perf
-
-    # battery interventions (remove completely)
-    'e73a048d-bf27-4f12-9731-8b2076e8891f 5dbb7c9f-38e9-40d2-9749-4f8a0e9f640f 0'    # crit battery notif off
-    'e73a048d-bf27-4f12-9731-8b2076e8891f 637ea02f-bbcb-4015-8e2c-a1c7b9c0b546 0'    # crit battery action nothing
-    'e73a048d-bf27-4f12-9731-8b2076e8891f 8183ba9a-e910-48da-8769-14ae6dc1170a 0'    # low battery level 0
-    'e73a048d-bf27-4f12-9731-8b2076e8891f 9a66d8d7-4ff7-4ef9-b5a2-5a326ca2a469 0'    # crit battery level 0
-    'e73a048d-bf27-4f12-9731-8b2076e8891f bcded951-187b-4d05-bccc-f7e51960c258 0'    # low battery notif off
-    'e73a048d-bf27-4f12-9731-8b2076e8891f d8742dcb-3e6a-4b3c-b3fe-374623cdcf06 0'    # low battery action nothing
-    'e73a048d-bf27-4f12-9731-8b2076e8891f f3c5027d-cd16-4930-aa6b-90db844a8f00 0'    # reserve battery level 0
-    'de830923-a562-41af-a086-e3a2c6bad2da 13d09884-f74e-474a-a852-b6bde8ad03a8 100'  # low screen brightness battery saver disabled
-    'de830923-a562-41af-a086-e3a2c6bad2da e69653ca-cf7f-4f05-aa73-cb833fa90ad4 0'    # battery saver auto never
-) | ForEach-Object {
-    $line = $_.Trim()
-    if (-not $line -or $line.StartsWith('#')) { return }
-    $parts = $line -split '\s+'
-    if ($parts.Count -lt 3) { return }
-    powercfg /attributes $parts[0] $parts[1] -ATTRIB_HIDE *>$NULL
-    powercfg /setacvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] *>$NULL
-    powercfg /setdcvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] *>$NULL
+function Set-PowerSetting {
+    param([string]$Plan, [string]$SubGroup, [string]$Setting, [int]$AC, [int]$DC)
+    $base = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\$Plan\$SubGroup\$Setting"
+    if (-not (Test-Path $base)) { New-Item $base -Force -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty $base -Name 'ACSettingIndex' -Value $AC -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty $base -Name 'DCSettingIndex' -Value $DC -Type DWord -ErrorAction SilentlyContinue
 }
 
-# activate the albus plan
-powercfg /setactive $AlbusGUID | Out-Null
+# disk
+Set-PowerSetting $AlbusGUID '0012ee47-9041-4b5d-9b77-535fba8b1442' '6738e2c4-e8a5-4a42-b16a-e040e769756e' 0   0    # disk turn off (never)
+# desktop slideshow
+Set-PowerSetting $AlbusGUID '0d7dbae2-4294-402a-ba8e-26777e8488cd' '309dce9b-bef4-4119-9921-a851fb12f0f4' 1   1    # paused
+# wireless
+Set-PowerSetting $AlbusGUID '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1' '12bbebe6-58d6-4636-95bb-3217ef867c1a' 0   0    # max perf
+# sleep
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' 0   0    # sleep after: never
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '94ac6d29-73ce-41a6-809f-6363ba21b47e' 0   0    # hybrid sleep off
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '9d7815a6-7ee4-497e-8888-515a05f02364' 0   0    # hibernate after: never
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' 'bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d' 0   0    # wake timers off
+# usb
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' '0853a681-27c8-4100-a2fd-82013e970683' 0   0    # hub suspend timeout
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' '48e6b7a6-50f5-4782-a5d4-53bb8f07e226' 0   0    # selective suspend off
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' 'd4e98f31-5ffe-4ce1-be31-1b38b384c009' 0   0    # usb3 link power off
+# power button
+Set-PowerSetting $AlbusGUID '4f971e89-eebd-4455-a8de-9e59040e7347' 'a7066653-8d6c-40a8-910e-a1f54b84c7e5' 2   2    # shutdown
+# pcie
+Set-PowerSetting $AlbusGUID '501a4d13-42af-4429-9fd1-a8218c268e20' 'ee12f906-d277-404b-b6da-e5fa1a576df5' 0   0    # link state off
+# cpu
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '893dee8e-2bef-41e0-89c6-b55d0929964c' 100 100  # min cpu state
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' 'bc5038f7-23e0-4960-96da-33abaf5935ec' 100 100  # max cpu state
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '0cc5b647-c1df-4637-891a-dec35c318583' 100 100  # core parking min
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' 'ea062031-0e34-4ff1-9b6d-eb1059334028' 100 100  # core parking max
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '94d3a615-a899-4ac5-ae2b-e4d8f634367f' 1   1    # cooling active
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '36687f9e-e3a5-4dbf-b1dc-15eb381c6863' 0   0    # energy perf pref
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '93b8b6dc-0698-4d1c-9ee4-0644e900c85d' 0   0    # heterogeneous scheduling
+# display
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e' 600 600  # timeout 10m
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'aded5e82-b909-4619-9949-f5d71dac0bcb' 100 100  # brightness
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'f1fbfde2-a960-4165-9f88-50667911ce96' 100 100  # dimmed brightness
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'fbd9aa66-9553-4097-ba44-ed6e9d65eab8' 0   0    # adaptive brightness off
+# video
+Set-PowerSetting $AlbusGUID '9596fb26-9850-41fd-ac3e-f7c3c00afd4b' '10778347-1370-4ee0-8bbd-33bdacaade49' 1   1    # quality bias
+Set-PowerSetting $AlbusGUID '9596fb26-9850-41fd-ac3e-f7c3c00afd4b' '34c7b99f-9a6d-4b3c-8dc7-b6693b78cef4' 0   0    # optimize quality
+# graphics
+Set-PowerSetting $AlbusGUID '44f3beca-a7c0-460e-9df2-bb8b99e0cba6' '3619c3f2-afb2-4afc-b0e9-e7fef372de36' 2   2    # intel max perf
+Set-PowerSetting $AlbusGUID 'c763b4ec-0e50-4b6b-9bed-2b92a6ee884e' '7ec1751b-60ed-4588-afb5-9819d3d77d90' 3   3    # amd best perf
+Set-PowerSetting $AlbusGUID 'f693fb01-e858-4f00-b20f-f30e12ac06d6' '191f65b5-d45c-4a4f-8aae-1ab8bfd980e6' 1   1    # ati max perf
+Set-PowerSetting $AlbusGUID 'e276e160-7cb0-43c6-b20b-73f5dce39954' 'a1662ab2-9d34-4e53-ba8b-2639b9e20857' 3   3    # switchable dynamic
+# battery
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '5dbb7c9f-38e9-40d2-9749-4f8a0e9f640f' 0   0    # crit notif off
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '637ea02f-bbcb-4015-8e2c-a1c7b9c0b546' 0   0    # crit action nothing
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '8183ba9a-e910-48da-8769-14ae6dc1170a' 0   0    # low level 0
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '9a66d8d7-4ff7-4ef9-b5a2-5a326ca2a469' 0   0    # crit level 0
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'bcded951-187b-4d05-bccc-f7e51960c258' 0   0    # low notif off
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'd8742dcb-3e6a-4b3c-b3fe-374623cdcf06' 0   0    # low action nothing
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'f3c5027d-cd16-4930-aa6b-90db844a8f00' 0   0    # reserve level 0
+Set-PowerSetting $AlbusGUID 'de830923-a562-41af-a086-e3a2c6bad2da' '13d09884-f74e-474a-a852-b6bde8ad03a8' 100 100  # battery saver brightness off
+Set-PowerSetting $AlbusGUID 'de830923-a562-41af-a086-e3a2c6bad2da' 'e69653ca-cf7f-4f05-aa73-cb833fa90ad4' 0   0    # battery saver auto never
 
-# disable hibernate
-powercfg /hibernate off | Out-Null
+# activate albus
+Write-Step 'activating albus power plan'
+cmd.exe /c "powercfg /setactive $AlbusGUID >NUL 2>&1"
+if ($LASTEXITCODE -ne 0) {
+    Set-ItemProperty -Path $PowerBase -Name 'ActivePowerScheme' -Value $AlbusGUID -Type String -ErrorAction SilentlyContinue
+}
+
+# hibernate
+Write-Step 'disabling hibernate'
+powercfg.exe /hibernate off *>$NULL
 $PwrKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power'
-Set-Reg $PwrKey 'HibernateEnabled' 0
+Set-Reg $PwrKey 'HibernateEnabled'        0
 Set-Reg $PwrKey 'HibernateEnabledDefault' 0
 
-# disable fast boot
-Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name 'HiberbootEnabled' -Value 0
-Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power'     -Name 'HiberbootEnabled' -Value 0
-Set-Reg -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'             -Name 'HiberbootEnabled' -Value 0
+# fast boot
+Write-Step 'disabling fast boot'
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0
+Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power'     'HiberbootEnabled' 0
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'             'HiberbootEnabled' 0
 
-# disable power throttling
+# power throttling
+Write-Step 'disabling power throttling'
 $ThrottleKey = "$PwrKey\PowerThrottling"
-if (-not (Test-Path $ThrottleKey)) { New-Item -Path $ThrottleKey -Force | Out-Null }
+if (-not (Test-Path $ThrottleKey)) { New-Item $ThrottleKey -Force | Out-Null }
 Set-Reg $ThrottleKey 'PowerThrottlingOff' 1
 
-# disable modern standby
-Set-Reg -Path 'HKLM:\System\CurrentControlSet\Control\Power' -Name 'PlatformAoAcOverride' -Value 0
+# modern standby
+Write-Step 'disabling modern standby'
+Set-Reg 'HKLM:\System\CurrentControlSet\Control\Power' 'PlatformAoAcOverride' 0
 
-# disable usage reporting
-wevtutil sl 'Microsoft-Windows-SleepStudy/Diagnostic'               /q:false
-wevtutil sl 'Microsoft-Windows-Kernel-Processor-Power/Diagnostic'   /q:false
-wevtutil sl 'Microsoft-Windows-UserModePowerService/Diagnostic'      /q:false
-Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' -Name 'SleepStudyDisabled' -Value 1
+# sleep study
+Write-Step 'disabling sleep study reporting'
+cmd.exe /c "wevtutil sl Microsoft-Windows-SleepStudy/Diagnostic /q:false >NUL 2>&1"
+cmd.exe /c "wevtutil sl Microsoft-Windows-Kernel-Processor-Power/Diagnostic /q:false >NUL 2>&1"
+cmd.exe /c "wevtutil sl Microsoft-Windows-UserModePowerService/Diagnostic /q:false >NUL 2>&1"
+Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' 'SleepStudyDisabled' 1
 
-# disable sleep and lock options in start menu
+# flyout
+Write-Step 'removing sleep & lock from start menu'
 $FlyoutKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings'
-if (-not (Test-Path $FlyoutKey)) { New-Item -Path $FlyoutKey -Force | Out-Null }
-Set-Reg $FlyoutKey 'ShowLockOption' 0
+if (-not (Test-Path $FlyoutKey)) { New-Item $FlyoutKey -Force | Out-Null }
+Set-Reg $FlyoutKey 'ShowLockOption'  0
 Set-Reg $FlyoutKey 'ShowSleepOption' 0
 
 Write-Step "albus power plan active [$AlbusGUID]" 'ok'
@@ -1885,17 +1928,34 @@ Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue |
         $p = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\Disk"
         Set-Reg $p 'UserWriteCacheSetting' 1
         Set-Reg $p 'CacheIsPowerProtected' 1
+        Set-Reg $p 'EnablePowerManagement' 0
+        Set-Reg $p 'AllowIdleIrpInD3'      0
     }
 
 # 8.4  disable device power saving
 Write-Step 'disabling device power saving states'
-$PowerKeys = @('SelectiveSuspendEnabled', 'SelectiveSuspendOn', 'EnhancedPowerManagementEnabled', 'WaitWakeEnabled')
+$PowerKeys = @('SelectiveSuspendEnabled', 'SelectiveSuspendOn', 'EnhancedPowerManagementEnabled', 'WaitWakeEnabled','DeviceIdleEnabled','AllowIdleIrpInD3','EnablePowerManagement','EnableSelectiveSuspend','DeviceIdleIgnoreWakeEnable')
 Get-PnpDevice -ErrorAction SilentlyContinue |
     Where-Object { $_.Status -match '^(OK|Unknown)$' } |
     ForEach-Object {
         $p = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.InstanceId)\Device Parameters"
         Set-Reg "$p\WDF" 'IdleInWorkingState' 0
         foreach ($key in $PowerKeys) { Set-Reg $p $key 0 }
+    }
+Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object { $_.InstanceId -like '*USB\ROOT*' -or $_.InstanceId -like '*USB\VID*' } |
+    ForEach-Object {
+        $id = $_.InstanceId
+        Get-CimInstance -ClassName MSPower_DeviceEnable -Namespace root\wmi -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$id*" } |
+            ForEach-Object {
+                Set-CimInstance -InputObject $_ -Property @{ Enable = $true } -ErrorAction SilentlyContinue
+            }
+        Get-CimInstance -ClassName MSPower_DeviceWakeEnable -Namespace root\wmi -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$id*" } |
+            ForEach-Object {
+                Set-CimInstance -InputObject $_ -Property @{ Enable = $false } -ErrorAction SilentlyContinue
+            }
     }
 
 # 8.5  exploit guard — disable system-wide mitigations for peak performance
