@@ -448,7 +448,6 @@ Write-Phase 'nvidia driver setup'
             Start-Process $InspectorExe.FullName -ArgumentList "-silentImport $NIPPath" -Wait -NoNewWindow
         }
     }
-
     Write-Done 'nvidia driver setup'
 }
 
@@ -1091,7 +1090,6 @@ Apply-Tweaks @(
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\ClickToRun\OverRide';              Name = 'DisableLogManagement'; Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration';  Name = 'TimerInterval';        Value = '900000'; Type = 'String' }
 )
-
 
 # ── 1.22  security
 Write-Step 'security'
@@ -2029,7 +2027,6 @@ Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue |
         Set-Reg $p 'UserWriteCacheSetting' 1
         Set-Reg $p 'CacheIsPowerProtected' 1
         Set-Reg $p 'EnablePowerManagement' 0
-        Set-Reg $p 'AllowIdleIrpInD3'      0
     }
 
 # 8.4  disable device power saving
@@ -2311,8 +2308,8 @@ function Remove-Edge {
     Invoke-EdgeUninstallProcess -Key '{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'
 
     @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
-      "$env:PUBLIC\Desktop",
-      "$env:USERPROFILE\Desktop") | ForEach-Object {
+      "$env:Public\Desktop",
+      "$env:UserProfile\Desktop") | ForEach-Object {
         $lnk = Join-Path $_ 'Microsoft Edge.lnk'
         if (Test-Path $lnk) { Remove-Item $lnk -Force -ErrorAction SilentlyContinue }
     }
@@ -2393,7 +2390,6 @@ Remove-OneDrive
 # ── winsxs ai & telemetry cleanup ─────────────────────────
 Write-Step 'winsxs ai & telemetry cleanup'
 
-# 1. telemetry / ai binary'lerini etkisizleştir (rename → .bak)
 $telemetryBinaries = @(
     "$env:SystemRoot\System32\CompatTelRunner.exe"
     "$env:SystemRoot\System32\DeviceCensus.exe"
@@ -2411,32 +2407,13 @@ $telemetryBinaries = @(
 foreach ($bin in $telemetryBinaries) {
     if (-not (Test-Path $bin)) { continue }
     try {
-        # ownership al
-        $acl = Get-Acl $bin
-        $owner = [System.Security.Principal.NTAccount]'Administrators'
-        $acl.SetOwner($owner)
-        Set-Acl $bin $acl
-
-        # full control ver
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            'Administrators','FullControl','Allow')
-        $acl.SetAccessRule($rule)
-        Set-Acl $bin $acl
-
-        # rename → .bak (silmek yerine — geri alınabilir)
-        Rename-Item $bin "$bin.bak" -Force -ErrorAction Stop
+        Rename-Item -Path $bin -NewName "$bin.bak" -Force -ErrorAction Stop
         Write-Step "neutralized: $(Split-Path $bin -Leaf)" 'ok'
     } catch {
-        # takeown + icacls fallback
-        $name = $bin
-        takeown /f $name /a | Out-Null
-        icacls $name /grant "Administrators:F" | Out-Null
-        try { Rename-Item $name "$name.bak" -Force -ErrorAction Stop }
-        catch { Write-Step "skipped (locked): $(Split-Path $bin -Leaf)" 'warn' }
+        Write-Step "skipped (locked or error): $(Split-Path $bin -Leaf)" 'warn'
     }
 }
 
-# 2. DISM component cleanup — eski güncelleme artıkları + superseded paketler
 Write-Step 'dism component store cleanup'
 try {
     $dismJobs = @(
@@ -2455,7 +2432,6 @@ try {
     Write-Step "dism cleanup failed: $_" 'fail'
 }
 
-# 3. DISM ile AI / telemetry capability paketlerini kaldır
 Write-Step 'removing ai & telemetry dism packages'
 $dismPackages = @(
     'Microsoft-Windows-DiagTrack-Package*'
@@ -2487,19 +2463,16 @@ foreach ($pkg in $dismPackages) {
     } catch { Write-Step "package query failed: $pkg" 'warn' }
 }
 
-# 4. WinSxS içindeki telemetry manifest'lerini devre dışı bırak
 Write-Step 'disabling telemetry winsxs manifests'
 $winsxsManifests = @('*diagtrack*','*telemetry*','*ceip*','*diaghub*','*wer*') | ForEach-Object {
     Get-ChildItem "$env:SystemRoot\WinSxS\Manifests" -Filter $_ -ErrorAction SilentlyContinue
 }
 foreach ($manifest in $winsxsManifests) {
     try {
-        takeown /f $manifest.FullName /a | Out-Null
-        icacls $manifest.FullName /grant "Administrators:F" | Out-Null
-        Rename-Item $manifest.FullName "$($manifest.FullName).bak" -Force -ErrorAction Stop
+        Rename-Item -Path $manifest.FullName -NewName "$($manifest.FullName).bak" -Force -ErrorAction Stop
         Write-Step "manifest disabled: $($manifest.Name)" 'ok'
     } catch {
-        Write-Step "manifest locked: $($manifest.Name)" 'warn'
+        Write-Step "manifest skipped (in use): $($manifest.Name)" 'warn'
     }
 }
 
@@ -2574,6 +2547,7 @@ Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━
 Write-Host "  albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m" -ForegroundColor White
 Write-Host "  log → $ALBUS_LOG" -ForegroundColor DarkGray
 Write-Host '  restart recommended.' -ForegroundColor DarkGray
+Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor DarkGray
 Write-Host ''
 
 Write-Log "COMPLETE in ${totalTime}m"
