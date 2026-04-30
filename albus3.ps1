@@ -1806,9 +1806,9 @@ powercfg /changename $AlbusGUID 'Albus' 'minimal latency, unparked cores, peak t
     'de830923-a562-41af-a086-e3a2c6bad2da e69653ca-cf7f-4f05-aa73-cb833fa90ad4 0'    # battery saver auto never
 ) | ForEach-Object {
     $parts = $_ -split '\s+'
-    powercfg /attributes $parts[0] $parts[1] -ATTRIB_HIDE | Out-Null
-    powercfg /setacvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] | Out-Null
-    powercfg /setdcvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] | Out-Null
+    powercfg /attributes $parts[0] $parts[1] -ATTRIB_HIDE 2>$NULL | Out-Null
+    powercfg /setacvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] 2>$NULL | Out-Null
+    powercfg /setdcvalueindex $AlbusGUID $parts[0] $parts[1] $parts[2] 2>$NULL | Out-Null
 }
 
 # activate the albus plan
@@ -2050,7 +2050,12 @@ Write-Phase 'startup cleanup'
   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce') | ForEach-Object {
     if (Test-Path $_) {
-        Get-Item $_ | ForEach-Object { $_.GetValueNames() | ForEach-Object { Remove-ItemProperty -Path $_.PSPath -Name $_ -Force -ErrorAction SilentlyContinue } }
+        Get-Item $_ | ForEach-Object { 
+            $keyPath = $_.PSPath 
+            $_.GetValueNames() | ForEach-Object { 
+                Remove-ItemProperty -Path $keyPath -Name $_ -Force -ErrorAction SilentlyContinue 
+            } 
+        }
     }
 }
 
