@@ -107,6 +107,11 @@ function Write-Banner {
     Write-Host ""
 }
 
+#  download file from url
+function Get-File {
+    param([string]$Url, [string]$Dest)
+    Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing -ErrorAction Stop
+}
 
 # ── registry engine ───────────────────────────────────
 
@@ -272,15 +277,12 @@ Write-Done 'system preparation'
 
 # ════════════════════════════════════════════════════════════
 #  PHASE 2 · SOFTWARE INSTALLATION
-
 Write-Phase 'software installation'
-
 if (Test-Network) {
-
     # 2.1  brave browser
     try {
         Write-Step 'brave browser'
-        $rel = Get-GitHubRelease 'brave/brave-browser'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/brave/brave-browser/releases/latest')
         Get-File "https://github.com/brave/brave-browser/releases/latest/download/BraveBrowserStandaloneSetup.exe" "$ALBUS_DIR\BraveSetup.exe"
         Start-Process -Wait "$ALBUS_DIR\BraveSetup.exe" -ArgumentList '/silent /install' -WindowStyle Hidden
         Set-Reg 'HKLM:\SOFTWARE\Policies\BraveSoftware\Brave' 'HardwareAccelerationModeEnabled' 0
@@ -288,11 +290,10 @@ if (Test-Network) {
         Set-Reg 'HKLM:\SOFTWARE\Policies\BraveSoftware\Brave' 'HighEfficiencyModeEnabled'       1
         Write-Step "brave $($rel.tag_name) installed" 'ok'
     } catch { Write-Step 'brave installation failed' 'fail' }
-
     # 2.2  7-zip
     try {
         Write-Step '7-zip'
-        $rel = Get-GitHubRelease 'ip7z/7zip'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/ip7z/7zip/releases/latest')
         $url = ($rel.assets | Where-Object { $_.name -match '7z.*-x64\.exe' }).browser_download_url
         Get-File $url "$ALBUS_DIR\7zip.exe"
         Start-Process -Wait "$ALBUS_DIR\7zip.exe" -ArgumentList '/S'
@@ -300,17 +301,15 @@ if (Test-Network) {
         Set-Reg 'HKCU:\Software\7-Zip\Options' 'CascadedMenu' 0
         Write-Step "7-zip $($rel.name) installed" 'ok'
     } catch { Write-Step '7-zip installation failed' 'fail' }
-
     # 2.3  localsend
     try {
         Write-Step 'localsend'
-        $rel = Get-GitHubRelease 'localsend/localsend'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/localsend/localsend/releases/latest')
         $url = ($rel.assets | Where-Object { $_.name -match 'LocalSend-.*-windows-x86-64\.exe' }).browser_download_url
         Get-File $url "$ALBUS_DIR\localsend.exe"
         Start-Process -Wait "$ALBUS_DIR\localsend.exe" -ArgumentList '/VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART'
         Write-Step "localsend $($rel.name) installed" 'ok'
     } catch { Write-Step 'localsend installation failed' 'fail' }
-
     # 2.4  visual c++ redistributable
     try {
         Write-Step 'visual c++ x64 runtime'
@@ -318,7 +317,6 @@ if (Test-Network) {
         Start-Process -Wait "$ALBUS_DIR\vc_redist.x64.exe" -ArgumentList '/quiet /norestart' -WindowStyle Hidden
         Write-Step 'vc++ runtime installed' 'ok'
     } catch { Write-Step 'vc++ runtime failed' 'fail' }
-
     # 2.5  directx runtime
     try {
         Write-Step 'directx runtime'
@@ -326,11 +324,9 @@ if (Test-Network) {
         Start-Process -Wait "$ALBUS_DIR\dxwebsetup.exe" -ArgumentList '/Q' -WindowStyle Hidden
         Write-Step 'directx runtime installed' 'ok'
     } catch { Write-Step 'directx runtime failed' 'fail' }
-
 } else {
     Write-Step 'no network — skipping software installation' 'warn'
 }
-
 Write-Done 'software installation'
 
 # ════════════════════════════════════════════════════════════
@@ -1552,7 +1548,7 @@ Write-Step 'blacking out account pictures'
     }
 }
 
-# context menu cleanup
+<# context menu cleanup
 Write-Step 'cleaning context menu'
 @(
     '-HKCR:\Folder\shell\pintohome'
@@ -1562,7 +1558,7 @@ Write-Step 'cleaning context menu'
     '-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\ModernSharing'
     '-HKCR:\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo'
     '-HKCR:\UserLibraryFolder\shellex\ContextMenuHandlers\SendTo'
-) | ForEach-Object { Set-Reg -Path $_ -Name '' -Value '' }
+) | ForEach-Object { Set-Reg -Path $_ -Name '' -Value '' } #>
 
 Apply-Tweaks @(
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';        Name = 'NoCustomizeThisFolder';                Value = 1 }
