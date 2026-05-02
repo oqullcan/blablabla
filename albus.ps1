@@ -2377,7 +2377,7 @@ if ((Test-Path $CSPath) -and $CSC) {
     }
     Remove-Item $CSPath -Force -ErrorAction SilentlyContinue
 } elseif (-not $CSC) {
-    Write-Step 'csc.exe bulunamadi — .NET Framework 4.x yuklu degil' 'warn'
+    Write-Step 'csc.exe not found — .NET Framework 4.x is not installed' 'warn'
 }
 
 if (Test-Path $ExePath) {
