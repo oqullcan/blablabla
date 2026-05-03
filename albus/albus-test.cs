@@ -2,12 +2,6 @@
 //  albus  v4.2
 //  precision system latency service
 //
-//  RESPONSIBILITY BOUNDARY
-//  ─────────────────────────────────────────────────────────────────────────────
-//  This service manages ONLY runtime-resident, dynamic, fully reversible state.
-//  Persistent registry/system settings written once at boot (TCP stack, power
-//  plan, driver parameters) belong to albus.ps1.
-//
 //  layers:
 //    · timer      — 0.5 ms kernel timer resolution, guard + watchdog
 //    · cpu        — hybrid P-core affinity (NUMA-aware), MMCSS Pro Audio
@@ -22,25 +16,6 @@
 //    · ini        — target process list + custom resolution, hot-reload
 //    · etw        — ETW kernel-session process tracking (WMI fallback)
 //
-//  LEFT TO SCRIPT (NOT in this service):
-//    · NetworkThrottlingIndex / SystemResponsiveness  — ps1 step 6.2
-//    · TcpNoDelay / TcpTimedWaitDelay / Tcp1323Opts   — ps1 phase 6
-//    · MaxUserPort                                    — ps1 phase 6
-//    · TrackNblOwner (NDIS debug)                     — ps1 phase 6
-//    · RSS queue registry (*NumRssQueues etc.)        — ps1 phase 6
-//    · Interrupt moderation registry                  — ps1 phase 6
-//    · AFD buffer sizes                               — ps1 phase 6
-//    · TdrDelay / TdrLevel                            — ps1 GPU phase
-//
-//  compile:
-//    csc.exe -r:System.ServiceProcess.dll
-//            -r:System.Configuration.Install.dll
-//            -r:System.Management.dll
-//            -out:AlbusX.exe albus2tr.cs
-//
-//  service name : AlbusXSvc
-//  exe name     : AlbusX.exe
-//  ini name     : AlbusX.exe.ini   (optional — global mode if absent)
 // ══════════════════════════════════════════════════════════════════════════════
 
 using System;
