@@ -63,7 +63,7 @@ namespace AlbusB
     // ══════════════════════════════════════════════════════════════════════════
     static class Log
     {
-        static readonly string LogPath = @"C:\AlbusB\albusbx.log";
+        static readonly string LogPath  = @"C:\AlbusB\albusbx.log";
         static readonly object FileLock = new object();
         static EventLog _eventLog;
 
@@ -81,20 +81,21 @@ namespace AlbusB
                     File.Move(LogPath, arch);
                 }
             }
-            catch {}
+            catch { }
         }
 
         public static void Write(string msg, bool warn = false)
         {
             string line = string.Format("[{0}] {1}", DateTime.Now.ToString("HH:mm:ss.fff"), msg);
             lock (FileLock)
-                try { File.AppendAllText(LogPath, line + Environment.NewLine); } catch {}
+                try { File.AppendAllText(LogPath, line + Environment.NewLine); } catch { }
             if (_eventLog != null)
                 try
                 {
                     _eventLog.WriteEntry(line,
                         warn ? EventLogEntryType.Warning : EventLogEntryType.Information);
-                } catch {}
+                }
+                catch { }
         }
     }
 
@@ -129,11 +130,11 @@ namespace AlbusB
             public byte PhysicalCore;      // from APIC/SMT pairing
         }
 
-        public static List<CoreInfo> Cores       = new List<CoreInfo>();
-        public static byte           MaxEffClass  = 0;
-        public static byte           BestNumaNode = 0;
-        public static long           PCoreMask    = 0;   // P-cores, no HT siblings
-        public static long           AllPCoreMask = 0;   // P-cores including HT
+        public static List<CoreInfo> Cores            = new List<CoreInfo>();
+        public static byte           MaxEffClass       = 0;
+        public static byte           BestNumaNode      = 0;
+        public static long           PCoreMask         = 0;   // P-cores, no HT siblings
+        public static long           AllPCoreMask      = 0;   // P-cores including HT
         public static int            PhysicalCoreCount = 0;
 
         public static void Detect()
@@ -151,7 +152,7 @@ namespace AlbusB
                     if (!GetSystemCpuSetInformation(buf, needed, out returned, IntPtr.Zero, 0))
                     { FallbackUniform(); return; }
 
-                    // pass 1: max efficiency class
+                    // pass 1: find max efficiency class
                     for (int off = 0; off < (int)returned; )
                     {
                         int sz = Marshal.ReadInt32(buf, off);
@@ -162,7 +163,7 @@ namespace AlbusB
                     }
 
                     // pass 2: collect all cores
-                    var physicalSeen = new Dictionary<byte, List<byte>>(); // physCore -> logicals
+                    var physicalSeen = new Dictionary<byte, List<byte>>();  // physCore -> logicals
 
                     for (int off = 0; off < (int)returned; )
                     {
@@ -171,7 +172,7 @@ namespace AlbusB
                         byte eff     = Marshal.ReadByte(buf, off + 18);
                         byte logical = Marshal.ReadByte(buf, off + 14);
                         byte numa    = Marshal.ReadByte(buf, off + 19);
-                        byte phys    = Marshal.ReadByte(buf, off + 20); // physical core index
+                        byte phys    = Marshal.ReadByte(buf, off + 20);
 
                         var ci = new CoreInfo
                         {
@@ -204,14 +205,14 @@ namespace AlbusB
                             kv.Value > nodeCount[BestNumaNode])
                             BestNumaNode = kv.Key;
 
-                    // Build masks
-                    // AllPCoreMask: all logical CPUs on P-cores in best NUMA
-                    // PCoreMask: only ONE logical per physical (no HT sibling)
-                    var usedPhys = new HashSet<byte>();
+                    // Build masks:
+                    //   AllPCoreMask — all logical CPUs on P-cores in best NUMA
+                    //   PCoreMask    — only ONE logical per physical (no HT sibling)
+                    var usedPhys = new SimpleHashSet<byte>();
                     foreach (var c in Cores)
                     {
                         if (c.EfficiencyClass < MaxEffClass) continue;
-                        if (c.NumaNode != BestNumaNode) continue;
+                        if (c.NumaNode != BestNumaNode)      continue;
                         AllPCoreMask |= (1L << c.LogicalIndex);
                         if (!usedPhys.Contains(c.PhysicalCore))
                         {
@@ -220,10 +221,10 @@ namespace AlbusB
                         }
                     }
 
-                    // If uniform (no hybrid), use all cores without HT siblings
+                    // Uniform CPU (no hybrid): use all cores, skip HT siblings
                     if (MaxEffClass == 0)
                     {
-                        usedPhys.Clear();
+                        usedPhys     = new SimpleHashSet<byte>();   // ← fresh instance, no Clear needed
                         PCoreMask    = 0;
                         AllPCoreMask = 0;
                         foreach (var c in Cores)
@@ -255,26 +256,24 @@ namespace AlbusB
             {
                 Cores.Add(new CoreInfo { LogicalIndex = i });
                 AllPCoreMask |= (1L << i);
-                // skip HT siblings (odd indices) on fallback if > 1 core
                 if (i % 2 == 0 || n <= 2) PCoreMask |= (1L << i);
             }
-            PhysicalCoreCount = n / 2;
+            PhysicalCoreCount = Math.Max(1, n / 2);
             Log.Write(string.Format("[topo] fallback uniform: {0} logical, mask=0x{1:X}", n, PCoreMask));
         }
 
-        // dedicated core for NIC IRQ (last P-core physical, not core-0)
+        // Dedicated core for NIC IRQ — physical core 1, first thread
         public static int NicIrqCore()
         {
             int n = Environment.ProcessorCount;
             if (n <= 1) return 0;
-            // use physical core 1 (logical index of its first thread)
             foreach (var c in Cores)
                 if (c.PhysicalCore == 1 && c.EfficiencyClass == MaxEffClass)
                     return c.LogicalIndex;
             return 1;
         }
 
-        // dedicated core for GPU IRQ (2nd physical P-core, avoid core-0 and NIC core)
+        // Dedicated core for GPU IRQ — physical core 2, first thread
         public static int GpuIrqCore()
         {
             int n = Environment.ProcessorCount;
@@ -304,11 +303,15 @@ namespace AlbusB
         static extern bool GetSystemCpuSetInformation(IntPtr info, uint bufLen,
             out uint returned, IntPtr proc, uint flags);
 
-        sealed class HashSet<T>
+        // ── Minimal HashSet replacement (no System.Collections.Generic.HashSet in .NET 3.5 target) ──
+        // FIX: renamed from nested HashSet<T> to SimpleHashSet<T> to avoid name collision,
+        //      and added Clear() so the uniform-CPU path can reuse without CS1061.
+        internal sealed class SimpleHashSet<T>
         {
             readonly Dictionary<T, bool> _d = new Dictionary<T, bool>();
             public bool Contains(T v) { return _d.ContainsKey(v); }
             public void Add(T v)      { _d[v] = true; }
+            public void Clear()       { _d.Clear(); }           // ← FIX: was missing
         }
     }
 
@@ -319,8 +322,8 @@ namespace AlbusB
     {
         // ── constants ────────────────────────────────────────────────────────
         const string SVC_NAME               = "AlbusBSvc";
-        const uint   TARGET_RESOLUTION      = 5000u;    // 0.5ms (100-ns units)
-        const uint   RESOLUTION_TOLERANCE   = 50u;      // 5µs
+        const uint   TARGET_RESOLUTION      = 5000u;    // 0.5 ms (100-ns units)
+        const uint   RESOLUTION_TOLERANCE   = 50u;      // 5 µs
         const int    GUARD_SEC              = 8;
         const int    WATCHDOG_SEC           = 8;
         const int    HEALTH_INITIAL_MIN     = 3;
@@ -346,10 +349,10 @@ namespace AlbusB
         int                    audioGlitchCount;
         ManualResetEventSlim   stopEvent = new ManualResetEventSlim(false);
 
-        // performance counters — created once, reused
+        // Performance counters — created once, reused
         PerformanceCounter pcMemAvail, pcCpuTotal;
 
-        // audio
+        // Audio
         readonly List<object> audioClients = new List<object>();
         AudioNotifier         audioNotifier;
 
@@ -383,14 +386,14 @@ namespace AlbusB
             Log.Init(EventLog);
             Log.Write("[albusbx] starting v1.0...");
 
-            // 1. Detect CPU topology first — everything else depends on it
+            //  1. Detect CPU topology first — everything else depends on it
             CpuTopology.Detect();
 
-            // 2. Self priority + affinity
+            //  2. Self priority + affinity
             SetSelfPriority();
             SetSelfAffinity();
 
-            // 3. ThreadPool
+            //  3. ThreadPool
             Safe.Run("threadpool", () =>
             {
                 int w, io;
@@ -398,17 +401,17 @@ namespace AlbusB
                 ThreadPool.SetMinThreads(Math.Max(w, 32), Math.Max(io, 16));
             });
 
-            // 4. GC sustained low latency
+            //  4. GC sustained low latency
             Safe.Run("gc", () => GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency);
 
-            // 5. High-res waitable timer
+            //  5. High-res waitable timer
             Safe.Run("waittimer", () =>
             {
                 hWaitTimer = CreateWaitableTimerExW(IntPtr.Zero, null,
                     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
             });
 
-            // 6. Working set lock 16–256 MB
+            //  6. Working set lock 16–256 MB
             Safe.Run("workingset", () =>
                 SetProcessWorkingSetSizeEx(
                     Process.GetCurrentProcess().Handle,
@@ -416,13 +419,13 @@ namespace AlbusB
                     (UIntPtr)(256 * 1024 * 1024),
                     QUOTA_LIMITS_HARDWS_MIN_ENABLE));
 
-            // 7. Large Pages
+            //  7. Large Pages
             AcquireLargePagePrivilege();
 
-            // 8. MMCSS Pro Audio
+            //  8. MMCSS Pro Audio
             Safe.Run("mmcss", () => { uint t = 0; AvSetMmThreadCharacteristics("Pro Audio", ref t); });
 
-            // 9. Disable EcoQoS throttling
+            //  9. Disable EcoQoS throttling
             DisableThrottling();
 
             // 10. Prevent sleep
@@ -466,7 +469,7 @@ namespace AlbusB
             // 20. Performance counters (created once)
             Safe.Run("perf_counters", () =>
             {
-                pcMemAvail = new PerformanceCounter("Memory", "Available MBytes");
+                pcMemAvail = new PerformanceCounter("Memory",    "Available MBytes");
                 pcCpuTotal = new PerformanceCounter("Processor", "% Processor Time", "_Total");
                 pcCpuTotal.NextValue(); // prime
             });
@@ -523,7 +526,6 @@ namespace AlbusB
             {
                 if (hWaitTimer != IntPtr.Zero) { CloseHandle(hWaitTimer); hWaitTimer = IntPtr.Zero; }
             });
-
             Safe.Run("perf_counters_stop", () =>
             {
                 if (pcMemAvail != null) { pcMemAvail.Dispose(); pcMemAvail = null; }
@@ -535,7 +537,7 @@ namespace AlbusB
             {
                 lock (largePageAllocs)
                     foreach (IntPtr p in largePageAllocs)
-                        try { VirtualFree(p, UIntPtr.Zero, MEM_RELEASE); } catch {}
+                        try { VirtualFree(p, UIntPtr.Zero, MEM_RELEASE); } catch { }
                 largePageAllocs.Clear();
             });
 
@@ -564,7 +566,7 @@ namespace AlbusB
                 s == PowerBroadcastStatus.ResumeAutomatic)
             {
                 Thread.Sleep(3000);
-                CpuTopology.Detect(); // topology can change after sleep on some laptops
+                CpuTopology.Detect();   // topology can change after sleep on some laptops
                 SetSelfPriority();
                 SetSelfAffinity();
                 TuneScheduler();
@@ -583,7 +585,7 @@ namespace AlbusB
         static void DropTimer(ref Timer t)
         {
             if (t == null) return;
-            try { t.Dispose(); } catch {}
+            try { t.Dispose(); } catch { }
             t = null;
         }
 
@@ -608,7 +610,6 @@ namespace AlbusB
             {
                 if (CpuTopology.PCoreMask == 0) return;
                 Process.GetCurrentProcess().ProcessorAffinity = (IntPtr)CpuTopology.PCoreMask;
-                // set ideal processor to first P-core
                 int ideal = 0;
                 for (int i = 0; i < 64; i++)
                     if ((CpuTopology.PCoreMask & (1L << i)) != 0) { ideal = i; break; }
@@ -634,8 +635,6 @@ namespace AlbusB
 
         // ══════════════════════════════════════════════════════════════════════
         //  SCHEDULER TUNING
-        //  · SystemSchedulerInformation — narrower quantum
-        //  · SystemDpcBehaviorInformation — relax DPC watchdog
         // ══════════════════════════════════════════════════════════════════════
         int savedDpcBehavior = -1;
 
@@ -643,8 +642,6 @@ namespace AlbusB
         {
             Safe.Run("scheduler_quantum", () =>
             {
-                // SYSTEM_SCHEDULER_INFORMATION: set quantum to SHORT (foreground boost)
-                // InfoClass 3 = SystemSchedulerInformation (undocumented but stable Win7+)
                 int quantum = 0x12; // short variable quantum
                 NtSetSystemInformation(3, ref quantum, sizeof(int));
                 Log.Write("[sched] quantum set to short-variable.");
@@ -652,11 +649,9 @@ namespace AlbusB
 
             Safe.Run("scheduler_dpc", () =>
             {
-                // Read current DPC behavior
                 int cur = 0;
                 NtQuerySystemInformation(DpcBehaviorInfo, ref cur, sizeof(int), IntPtr.Zero);
                 savedDpcBehavior = cur;
-                // Set to 0 = DPC watchdog disabled (no forced DPC timeouts)
                 int val = 0;
                 NtSetSystemInformation(DpcBehaviorInfo, ref val, sizeof(int));
                 Log.Write(string.Format("[sched] dpc watchdog disabled (was {0}).", cur));
@@ -686,7 +681,11 @@ namespace AlbusB
                 using (RegistryKey k = Registry.LocalMachine.OpenSubKey(
                     @"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
                 {
-                    if (k != null) { object v = k.GetValue("CurrentBuildNumber"); if (v != null) int.TryParse(v.ToString(), out build); }
+                    if (k != null)
+                    {
+                        object v = k.GetValue("CurrentBuildNumber");
+                        if (v != null) int.TryParse(v.ToString(), out build);
+                    }
                 }
                 return build >= WIN11_BUILD;
             }, false);
@@ -737,9 +736,8 @@ namespace AlbusB
         {
             Safe.Run("gpu_irq", () =>
             {
-                int gpuCore  = CpuTopology.GpuIrqCore();
-                long gpuMask = 1L << gpuCore;
-                // also allow all P-cores except core-0 (for multi-GPU interrupt spread)
+                int  gpuCore  = CpuTopology.GpuIrqCore();
+                long gpuMask  = 1L << gpuCore;
                 long fullMask = CpuTopology.PCoreMask & ~1L;
                 if (fullMask == 0) fullMask = gpuMask;
 
@@ -779,8 +777,8 @@ namespace AlbusB
         {
             Safe.Run("nic_irq", () =>
             {
-                int nicCore  = CpuTopology.NicIrqCore();
-                long nicMask = 1L << nicCore;
+                int  nicCore  = CpuTopology.NicIrqCore();
+                long nicMask  = 1L << nicCore;
 
                 const string NIC_CLASS =
                     @"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}";
@@ -795,7 +793,10 @@ namespace AlbusB
                         {
                             if (dev == null) continue;
                             if (IsVirtualAdapter(dev)) continue;
+
                             string dk = NIC_CLASS + "\\" + sub;
+
+                            // Save originals
                             using (RegistryKey pol = dev.OpenSubKey("Interrupt Management\\Affinity Policy"))
                             {
                                 if (pol != null)
@@ -803,9 +804,11 @@ namespace AlbusB
                                     object ov = pol.GetValue("AssignmentSetOverride");
                                     if (ov is byte[]) origNicMask[dk] = (byte[])ov;
                                     object od = pol.GetValue("DevicePolicy");
-                                    if (od != null) try { origNicPolicy[dk] = (int)od; } catch {}
+                                    if (od != null) try { origNicPolicy[dk] = (int)od; } catch { }
                                 }
                             }
+
+                            // Apply
                             using (RegistryKey pol = dev.CreateSubKey("Interrupt Management\\Affinity Policy"))
                             {
                                 if (pol == null) continue;
@@ -822,7 +825,6 @@ namespace AlbusB
                 }
             });
 
-            // QoS — mark all existing UDP sockets as high throughput
             ApplyQosToUdpSockets();
         }
 
@@ -830,7 +832,6 @@ namespace AlbusB
         {
             Safe.Run("nic_qos", () =>
             {
-                // Windows QoS API via P/Invoke
                 IntPtr hQos = IntPtr.Zero;
                 QOS_VERSION ver;
                 ver.MajorVersion = 1;
@@ -839,21 +840,17 @@ namespace AlbusB
 
                 try
                 {
-                    // Scan active processes for game-like UDP sockets
-                    // We set registry-level QoS which applies globally to DSCP
-                    // Full per-socket QoS requires socket handle which we can't get cross-process
-                    // Instead: set HKLM DSCP tagging for realtime traffic class
                     using (RegistryKey qos = Registry.LocalMachine.CreateSubKey(
                         @"SOFTWARE\Policies\Microsoft\Windows\QoS\AlbusB-Realtime"))
                     {
-                        qos.SetValue("Version",          "1.0",      RegistryValueKind.String);
-                        qos.SetValue("Protocol",         "UDP",      RegistryValueKind.String);
-                        qos.SetValue("Local Port",       "*",        RegistryValueKind.String);
-                        qos.SetValue("Remote Port",      "*",        RegistryValueKind.String);
-                        qos.SetValue("Local IP",         "0.0.0.0",  RegistryValueKind.String);
-                        qos.SetValue("Remote IP",        "0.0.0.0",  RegistryValueKind.String);
-                        qos.SetValue("DSCP Value",       "46",       RegistryValueKind.String); // EF = Expedited Forwarding
-                        qos.SetValue("Throttle Rate",    "-1",       RegistryValueKind.String); // unlimited
+                        qos.SetValue("Version",       "1.0",     RegistryValueKind.String);
+                        qos.SetValue("Protocol",      "UDP",     RegistryValueKind.String);
+                        qos.SetValue("Local Port",    "*",       RegistryValueKind.String);
+                        qos.SetValue("Remote Port",   "*",       RegistryValueKind.String);
+                        qos.SetValue("Local IP",      "0.0.0.0", RegistryValueKind.String);
+                        qos.SetValue("Remote IP",     "0.0.0.0", RegistryValueKind.String);
+                        qos.SetValue("DSCP Value",    "46",      RegistryValueKind.String); // EF
+                        qos.SetValue("Throttle Rate", "-1",      RegistryValueKind.String); // unlimited
                     }
                     Log.Write("[qos] udp dscp ef (46) policy applied.");
                 }
@@ -891,7 +888,6 @@ namespace AlbusB
                         }
                     }
                 }
-                // Remove QoS policy
                 Safe.Run("qos_remove", () =>
                     Registry.LocalMachine.DeleteSubKey(
                         @"SOFTWARE\Policies\Microsoft\Windows\QoS\AlbusB-Realtime", false));
@@ -915,7 +911,8 @@ namespace AlbusB
                     string d = v.ToString().ToLowerInvariant();
                     foreach (string k in kw) if (d.Contains(k)) return true;
                 }
-            } catch {}
+            }
+            catch { }
             return false;
         }
 
@@ -926,7 +923,6 @@ namespace AlbusB
         {
             Safe.Run("largepages", () =>
             {
-                // Acquire SeLockMemoryPrivilege
                 IntPtr hToken;
                 if (!OpenProcessToken(Process.GetCurrentProcess().Handle,
                     TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out hToken)) return;
@@ -957,9 +953,8 @@ namespace AlbusB
         {
             Safe.Run("mem_priority", () =>
             {
-                // Set process memory priority to high (avoid page reclaim)
                 MEMORY_PRIORITY_INFORMATION mpi;
-                mpi.MemoryPriority = MEMORY_PRIORITY_NORMAL; // 5 = normal = don't page us out
+                mpi.MemoryPriority = MEMORY_PRIORITY_NORMAL;
                 SetProcessInformation2(Process.GetCurrentProcess().Handle,
                     ProcessMemoryPriority, ref mpi,
                     Marshal.SizeOf(typeof(MEMORY_PRIORITY_INFORMATION)));
@@ -968,10 +963,9 @@ namespace AlbusB
 
             Safe.Run("mem_numa", () =>
             {
-                // Pre-allocate a small NUMA-local buffer to warm up the allocator
                 if (CpuTopology.BestNumaNode == 0) return;
-                UIntPtr sz    = (UIntPtr)(4 * 1024 * 1024); // 4MB warm-up
-                IntPtr  numa  = VirtualAllocExNuma(
+                UIntPtr sz   = (UIntPtr)(4 * 1024 * 1024); // 4 MB warm-up
+                IntPtr  numa = VirtualAllocExNuma(
                     Process.GetCurrentProcess().Handle,
                     IntPtr.Zero, sz,
                     MEM_COMMIT | MEM_RESERVE,
@@ -1091,7 +1085,6 @@ namespace AlbusB
 
         void WatchdogCallback(object _)
         {
-            // Self priority
             Safe.Run("wd_prio", () =>
             {
                 Process self = Process.GetCurrentProcess();
@@ -1102,7 +1095,6 @@ namespace AlbusB
                 }
             });
 
-            // Self affinity
             Safe.Run("wd_affinity", () =>
             {
                 if (CpuTopology.PCoreMask == 0) return;
@@ -1114,14 +1106,12 @@ namespace AlbusB
                 }
             });
 
-            // DWM
             Safe.Run("wd_dwm", () =>
             {
                 foreach (Process p in Process.GetProcessesByName("dwm"))
-                    try { if (p.PriorityClass != ProcessPriorityClass.High) p.PriorityClass = ProcessPriorityClass.High; } catch {}
+                    try { if (p.PriorityClass != ProcessPriorityClass.High) p.PriorityClass = ProcessPriorityClass.High; } catch { }
             });
 
-            // Timer
             Safe.Run("wd_timer", () =>
             {
                 uint qMin, qMax, qCur;
@@ -1156,7 +1146,6 @@ namespace AlbusB
                 float cpu = 0;
                 if (pcCpuTotal != null) { pcCpuTotal.NextValue(); Thread.Sleep(200); cpu = pcCpuTotal.NextValue(); }
 
-                // Measure current jitter
                 long best = long.MaxValue;
                 for (int i = 0; i < 300; i++)
                 {
@@ -1181,7 +1170,6 @@ namespace AlbusB
 
                 if (jitterBad)
                 {
-                    // Re-arm everything if jitter is abnormal
                     SetSelfPriority();
                     SetSelfAffinity();
                     DisableCStates();
@@ -1221,12 +1209,12 @@ namespace AlbusB
             Safe.Run("ui_prio", () =>
             {
                 foreach (Process p in Process.GetProcessesByName("dwm"))
-                    try { p.PriorityClass = ProcessPriorityClass.High; } catch {}
+                    try { p.PriorityClass = ProcessPriorityClass.High; } catch { }
 
                 ProcessPriorityClass expPrio = boost
                     ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal;
                 foreach (Process p in Process.GetProcessesByName("explorer"))
-                    try { p.PriorityClass = expPrio; } catch {}
+                    try { p.PriorityClass = expPrio; } catch { }
 
                 if (boost) Log.Write("[prio] dwm=high, explorer=belownormal.");
             });
@@ -1317,7 +1305,7 @@ namespace AlbusB
             Thread.Sleep(3000);
             Safe.Run("wmi_restart", () =>
             {
-                if (startWatch != null) try { startWatch.Dispose(); } catch {}
+                if (startWatch != null) try { startWatch.Dispose(); } catch { }
                 startWatch = null;
                 StartWmiWatcher();
             });
@@ -1327,7 +1315,8 @@ namespace AlbusB
         {
             Safe.Run("wmi_arrived", () =>
             {
-                ManagementBaseObject proc = (ManagementBaseObject)e.NewEvent.Properties["TargetInstance"].Value;
+                ManagementBaseObject proc =
+                    (ManagementBaseObject)e.NewEvent.Properties["TargetInstance"].Value;
                 uint   pid  = (uint)proc.Properties["ProcessId"].Value;
                 string name = proc.Properties["Name"].Value.ToString().ToLowerInvariant();
                 ThreadPool.QueueUserWorkItem(delegate { ProcessStarted(pid, name); });
@@ -1339,7 +1328,6 @@ namespace AlbusB
         {
             Safe.Run("proc_start", () =>
             {
-                // MMCSS + self boost
                 uint t = 0; AvSetMmThreadCharacteristics("Pro Audio", ref t);
                 Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
@@ -1347,12 +1335,9 @@ namespace AlbusB
                 PurgeStandbyList();
                 GhostMemory();
                 ModulateUiPriority(true);
-
-                // Set affinity and priority on target process
                 ApplyProcessOptimizations(pid, name);
             });
 
-            // Wait for process exit
             IntPtr hProc = IntPtr.Zero;
             Safe.Run("proc_wait", () =>
             {
@@ -1375,15 +1360,12 @@ namespace AlbusB
                 Process proc = null;
                 try { proc = Process.GetProcessById((int)pid); } catch { return; }
 
-                // Priority
-                try { proc.PriorityClass = ProcessPriorityClass.High; } catch {}
-                try { proc.PriorityBoostEnabled = true; } catch {}
+                try { proc.PriorityClass        = ProcessPriorityClass.High; } catch { }
+                try { proc.PriorityBoostEnabled  = true;                      } catch { }
 
-                // Affinity — all P-cores (including HT siblings for game processes)
                 if (CpuTopology.AllPCoreMask != 0)
-                    try { proc.ProcessorAffinity = (IntPtr)CpuTopology.AllPCoreMask; } catch {}
+                    try { proc.ProcessorAffinity = (IntPtr)CpuTopology.AllPCoreMask; } catch { }
 
-                // Disable EcoQoS on target
                 Safe.Run("proc_ecoqos", () =>
                 {
                     PROCESS_POWER_THROTTLING s;
@@ -1394,7 +1376,6 @@ namespace AlbusB
                         Marshal.SizeOf(typeof(PROCESS_POWER_THROTTLING)));
                 });
 
-                // Apply to child processes too
                 ApplyToChildren(proc);
 
                 Log.Write(string.Format(
@@ -1418,9 +1399,9 @@ namespace AlbusB
                         Safe.Run("child_opt", () =>
                         {
                             Process cp = Process.GetProcessById((int)cpid);
-                            try { cp.PriorityClass = ProcessPriorityClass.AboveNormal; } catch {}
+                            try { cp.PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
                             if (CpuTopology.AllPCoreMask != 0)
-                                try { cp.ProcessorAffinity = (IntPtr)CpuTopology.AllPCoreMask; } catch {}
+                                try { cp.ProcessorAffinity = (IntPtr)CpuTopology.AllPCoreMask; } catch { }
                         });
                     }
                 }
@@ -1441,9 +1422,9 @@ namespace AlbusB
 
         void AudioWorker()
         {
-            Safe.Run("audio_mmcss", () => { uint t = 0; AvSetMmThreadCharacteristics("Pro Audio", ref t); });
+            Safe.Run("audio_mmcss",  () => { uint t = 0; AvSetMmThreadCharacteristics("Pro Audio", ref t); });
             Safe.Run("audio_coinit", () => CoInitializeEx(IntPtr.Zero, COINIT_MULTITHREADED));
-            Safe.Run("audio_main", () =>
+            Safe.Run("audio_main",   () =>
             {
                 Type t = Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"));
                 IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(t);
@@ -1490,7 +1471,8 @@ namespace AlbusB
                                 lock (audioClients) audioClients.Add(co);
                                 WAVEFORMATEX fmt = (WAVEFORMATEX)Marshal.PtrToStructure(pFmt, typeof(WAVEFORMATEX));
                                 string devId; dev.GetId(out devId);
-                                string sid = (devId != null && devId.Length > 8) ? devId.Substring(devId.Length - 8) : "?";
+                                string sid = (devId != null && devId.Length > 8)
+                                    ? devId.Substring(devId.Length - 8) : "?";
                                 Log.Write(string.Format(
                                     "[audio] {0}: {1:F3}ms → {2:F3}ms (frames {3}→{4})",
                                     sid,
@@ -1498,7 +1480,7 @@ namespace AlbusB
                                     (minF / (double)fmt.nSamplesPerSec) * 1000.0,
                                     defF, minF));
 
-                                // Start glitch detection thread for this client
+                                // Glitch detector for this endpoint
                                 IAudioClient3 glitchClient = client;
                                 Thread gd = new Thread(delegate() { GlitchDetector(glitchClient); });
                                 gd.Name         = "albusbx-glitch";
@@ -1513,10 +1495,16 @@ namespace AlbusB
             });
         }
 
+        // ── Glitch detector ───────────────────────────────────────────────────
+        // FIX: lastPos is now captured properly inside the closure-friendly helper
+        //      variables; uses consecutive-zero-padding heuristic + a stall counter
+        //      based on elapsed time to detect real underruns vs. silence.
         void GlitchDetector(IAudioClient3 client)
         {
-            // Poll stream position; if it stalls → glitch
-            ulong lastPos = 0;
+            uint prevPadding        = uint.MaxValue;
+            int  consecutiveZero    = 0;
+            long lastNonZeroTick    = Stopwatch.GetTimestamp();
+
             while (!stopEvent.IsSet)
             {
                 Thread.Sleep(50);
@@ -1524,13 +1512,30 @@ namespace AlbusB
                 {
                     uint padding;
                     if (client.GetCurrentPadding(out padding) != 0) return;
-                    // If padding suddenly jumps to max (buffer full = underrun recovery), count it
-                    // This is a heuristic — proper glitch detection needs AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+
                     if (padding == 0)
                     {
-                        Interlocked.Increment(ref audioGlitchCount);
-                        Log.Write("[audio] glitch detected (buffer underrun).");
+                        consecutiveZero++;
+                        long elapsed = Stopwatch.GetTimestamp() - lastNonZeroTick;
+                        double elapsedMs = (elapsed * 1000.0) / Stopwatch.Frequency;
+
+                        // Only flag as glitch if buffer stays empty for > 100 ms
+                        // (avoids false positives during intentional silence)
+                        if (consecutiveZero >= 2 && elapsedMs > 100.0)
+                        {
+                            Interlocked.Increment(ref audioGlitchCount);
+                            Log.Write(string.Format(
+                                "[audio] glitch detected (underrun, silent={0:F0}ms).", elapsedMs));
+                            consecutiveZero  = 0;       // reset to avoid spam per stall event
+                            lastNonZeroTick  = Stopwatch.GetTimestamp();
+                        }
                     }
+                    else
+                    {
+                        consecutiveZero = 0;
+                        lastNonZeroTick = Stopwatch.GetTimestamp();
+                    }
+                    prevPadding = padding;
                 });
             }
         }
@@ -1552,10 +1557,12 @@ namespace AlbusB
                 if (line.Length == 0 || line.StartsWith("#") || line.StartsWith("//")) continue;
                 if (line.ToLowerInvariant().StartsWith("resolution="))
                 {
-                    uint v; if (uint.TryParse(line.Substring(11).Trim(), out v)) customRes = v;
+                    uint v;
+                    if (uint.TryParse(line.Substring(11).Trim(), out v)) customRes = v;
                     continue;
                 }
-                foreach (string tok in line.Split(new char[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                foreach (string tok in line.Split(
+                    new char[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
                 {
                     string n = tok.ToLowerInvariant().Trim();
                     if (n.Length == 0) continue;
@@ -1571,10 +1578,11 @@ namespace AlbusB
             Safe.Run("ini_watch", () =>
             {
                 string ini = Assembly.GetExecutingAssembly().Location + ".ini";
-                iniWatcher = new FileSystemWatcher(Path.GetDirectoryName(ini), Path.GetFileName(ini));
-                iniWatcher.NotifyFilter        = NotifyFilters.LastWrite;
-                iniWatcher.Changed            += OnIniChanged;
-                iniWatcher.EnableRaisingEvents = true;
+                iniWatcher = new FileSystemWatcher(
+                    Path.GetDirectoryName(ini), Path.GetFileName(ini));
+                iniWatcher.NotifyFilter         = NotifyFilters.LastWrite;
+                iniWatcher.Changed             += OnIniChanged;
+                iniWatcher.EnableRaisingEvents  = true;
             });
         }
 
@@ -1585,7 +1593,8 @@ namespace AlbusB
             {
                 ReadConfig();
                 targetRes = customRes > 0 ? customRes : Math.Min(TARGET_RESOLUTION, maxRes);
-                if (startWatch != null) try { startWatch.Stop(); startWatch.Dispose(); startWatch = null; } catch {}
+                if (startWatch != null)
+                    try { startWatch.Stop(); startWatch.Dispose(); startWatch = null; } catch { }
                 if (processNames != null && processNames.Count > 0) StartEtwWatcher();
                 else { SetResolutionVerified(); ModulateUiPriority(true); }
                 Log.Write("[ini] config reloaded.");
@@ -1760,8 +1769,7 @@ namespace AlbusB
 
         delegate void EventRecordCallback(ref EVENT_RECORD r);
 
-        // ── COM interfaces (all explicitly internal — C#5 CS0051 fix) ─────────
-
+        // ── COM interfaces ────────────────────────────────────────────────────
         [ComImport][Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         internal interface IMMDeviceCollection
@@ -1888,7 +1896,6 @@ namespace AlbusB
             }
         }
 
-        // helper to call Log from nested class
         internal void Log_(string msg) { Log.Write(msg); }
     }
 
