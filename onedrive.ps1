@@ -8,50 +8,33 @@
 
 Write-Phase 'debloat'
 
-# ── helper: run as trustedinstaller ───────────────────────
-function Invoke-AsTI {
-    param([string]$Code)
-    $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $regKey  = "Registry::HKU\$userSid\Volatile Environment"
-    $bytes   = [System.Text.Encoding]::Unicode.GetBytes($Code)
-    $b64     = [Convert]::ToBase64String($bytes)
-    Set-ItemProperty $regKey '_AlbusTI' $b64 -Type 1 -ErrorAction SilentlyContinue
-    try { Stop-Service TrustedInstaller -Force -ErrorAction Stop } catch { taskkill /im trustedinstaller.exe /f *>$null }
-    $svc = Get-CimInstance Win32_Service -Filter "Name='TrustedInstaller'"
-    $def = $svc.PathName
-    sc.exe config TrustedInstaller binPath= "cmd.exe /c powershell -nop -ep bypass -enc $b64" | Out-Null
-    sc.exe start  TrustedInstaller | Out-Null
-    Start-Sleep 3
-    sc.exe config TrustedInstaller binpath= "`"$def`"" | Out-Null
-    try { Stop-Service TrustedInstaller -Force -ErrorAction SilentlyContinue } catch { taskkill /im trustedinstaller.exe /f *>$null }
-    Remove-ItemProperty $regKey '_AlbusTI' -ErrorAction SilentlyContinue
-}
+# TrustedInstaller wrapper kaldırıldı — script zaten TI seviyesinde çalışıyor
 
-# ── FIX: safe reg delete — key/value yoksa sessizce atlar ──
-# $ErrorActionPreference='Stop' ortamında reg.exe query'nin non-zero exit code'u
-# NativeCommandError fırlatır. cmd /c wrapper + *>$null ile hem stdout/stderr
-# hem de PS hata akışı tamamen bastırılır; sadece $LASTEXITCODE kontrol edilir.
+# ── safe reg delete — saf PS, reg.exe query yok, NativeCommandError olmaz ──
 function Invoke-RegDelete {
     param(
         [string]$Path,
         [string]$Value = ''
     )
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-    try {
-        if ($Value) {
-            cmd /c "reg.exe query `"$Path`" /v `"$Value`"" *>$null
-        } else {
-            cmd /c "reg.exe query `"$Path`"" *>$null
-        }
-        if ($LASTEXITCODE -ne 0) { return }
-        if ($Value) {
-            cmd /c "reg.exe delete `"$Path`" /v `"$Value`" /f" *>$null
-        } else {
-            cmd /c "reg.exe delete `"$Path`" /f" *>$null
-        }
-    } finally {
-        $ErrorActionPreference = $prev
+    # reg.exe formatını (HKLM\...) PS sürücü formatına (HKLM:\...) çevir
+    $psPath = $Path `
+        -replace '^HKLM\\',                 'HKLM:\' `
+        -replace '^HKCU\\',                 'HKCU:\' `
+        -replace '^HKCR\\',                 'HKCR:\' `
+        -replace '^HKU\\',                  'HKU:\'  `
+        -replace '^HKEY_LOCAL_MACHINE\\',   'HKLM:\' `
+        -replace '^HKEY_CURRENT_USER\\',    'HKCU:\' `
+        -replace '^HKEY_CLASSES_ROOT\\',    'HKCR:\' `
+        -replace '^HKEY_USERS\\',           'HKU:\'
+
+    if (-not (Test-Path $psPath -ErrorAction SilentlyContinue)) { return }
+
+    if ($Value) {
+        $prop = Get-ItemProperty $psPath -Name $Value -ErrorAction SilentlyContinue
+        if ($null -eq $prop) { return }
+        Remove-ItemProperty $psPath -Name $Value -Force -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item $psPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -342,22 +325,16 @@ Invoke-RegDelete 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell\Update\Pa
 Invoke-RegDelete 'HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\ActionsMcpHost.exe'
 Invoke-RegDelete 'HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\ActionsMcpHost.exe'
 
-# recall tasks
+# recall tasks — TI wrapper kaldırıldı, zaten TI seviyesinde çalışıyor
 Write-Step 'removing recall scheduled tasks'
-$tiCode = @"
 Get-ScheduledTask -TaskPath '*WindowsAI*' -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue
-Remove-Item "`$env:SystemRoot\System32\Tasks\Microsoft\Windows\WindowsAI" -Recurse -Force -ErrorAction SilentlyContinue
-`$initID = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\WindowsAI\Recall\InitialConfiguration" -Name 'Id' -ErrorAction SilentlyContinue
-`$polID  = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\WindowsAI\Recall\PolicyConfiguration"  -Name 'Id' -ErrorAction SilentlyContinue
-if (`$initID) { Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\`$initID" -Recurse -Force -ErrorAction SilentlyContinue }
-if (`$polID)  { Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\`$polID"  -Recurse -Force -ErrorAction SilentlyContinue }
+Remove-Item "$env:SystemRoot\System32\Tasks\Microsoft\Windows\WindowsAI" -Recurse -Force -ErrorAction SilentlyContinue
+$initID = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\WindowsAI\Recall\InitialConfiguration" -Name 'Id' -ErrorAction SilentlyContinue
+$polID  = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\WindowsAI\Recall\PolicyConfiguration"  -Name 'Id' -ErrorAction SilentlyContinue
+if ($initID) { Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$initID" -Recurse -Force -ErrorAction SilentlyContinue }
+if ($polID)  { Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$polID"  -Recurse -Force -ErrorAction SilentlyContinue }
 Remove-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\WindowsAI" -Recurse -Force -ErrorAction SilentlyContinue
-Get-ScheduledTask -TaskName '*Office Actions Server*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:`$false -ErrorAction SilentlyContinue
-"@
-$tiPath = "$env:TEMP\albus_recall_tasks.ps1"
-Set-Content $tiPath $tiCode -Force
-Invoke-AsTI -Code (Get-Content $tiPath -Raw)
-Remove-Item $tiPath -Force -ErrorAction SilentlyContinue
+Get-ScheduledTask -TaskName '*Office Actions Server*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 
 Write-Step 'copilot registry & policies applied' 'ok'
 
@@ -477,15 +454,12 @@ if ($env:OneDrive -and (Test-Path "$env:OneDrive\Microsoft Copilot Chat Files"))
     Remove-Item "$env:OneDrive\Microsoft Copilot Chat Files" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# remove DLLs and folder paths via TI
-$tiRemoveCode = ($aiFilePaths | ForEach-Object {
-    $p = $_
-    "Get-ChildItem '$p' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item `$_.FullName -Recurse -Force -ErrorAction SilentlyContinue }"
-}) -join "`n"
-$tiPath2 = "$env:TEMP\albus_ai_files.ps1"
-Set-Content $tiPath2 $tiRemoveCode -Force
-Invoke-AsTI -Code (Get-Content $tiPath2 -Raw)
-Remove-Item $tiPath2 -Force -ErrorAction SilentlyContinue
+# remove DLLs and folder paths — TI wrapper kaldırıldı, zaten TI seviyesinde çalışıyor
+foreach ($p in $aiFilePaths) {
+    Get-ChildItem $p -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Step 'copilot files removed' 'ok'
 
