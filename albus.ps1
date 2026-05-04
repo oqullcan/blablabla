@@ -607,7 +607,7 @@ Write-Step '2.2 — win32 priority separation'
 Set-Reg -Path 'HKLM:\SYSTEM\ControlSet001\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 38
 
 Write-Step '2.3 — vbs & memory integrity (disable)'
-bcdedit /set nx AlwaysOff | Out-Null
+# bcdedit /set nx AlwaysOff | Out-Null
 bcdedit /set hypervisorlaunchtype off | Out-Null
 bcdedit /set vsmlaunchtype off | Out-Null
 Set-Regs @(
