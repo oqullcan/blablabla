@@ -1,112 +1,156 @@
-# =============================================================================================================================================================================
+# =============================================================================================================
+# albus bootstrap — hardened edition
+# =============================================================================================================
 
 $ErrorActionPreference = 'Stop'
 Clear-Host
 
-# admin privilege audit
-$Principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"" -Verb RunAs
-    Exit
+# ─── admin elevation ─────────────────────────────────────────────────────────
+$principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process powershell.exe -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`"" -Verb RunAs
+    exit
 }
 
+# ─── env setup ──────────────────────────────────────────────────────────────
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$Identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$Privilege = $Identity.Split('\')[-1].ToLower()
-[Console]::Title = "albus - $Privilege"
 
-# path configuration
-$Env:InstallPath = "C:\Albus"
-$MinSudoPath = "$Env:InstallPath\MinSudo.exe"
-$RepoURL = "https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/albus.ps1"
+$InstallPath = "C:\Albus"
+$MinSudoPath = "$InstallPath\MinSudo.exe"
+$TempDir     = "$InstallPath\tmp"
+$ZipPath     = "$TempDir\nana.zip"
+$RepoURL     = "https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/albus.ps1"
 
-# albus status engine (unified)
+# ─── ui ─────────────────────────────────────────────────────────────────────
 function Status ($Msg, $Type = "info") {
-    $P, $C = switch ($Type) {
-        "info"    { "info", "Cyan" }
-        "done"    { "done", "Green" }
-        "warn"    { "warn", "Yellow" }
-        "fail"    { "fail", "Red" }
-        "step"    { "step", "Magenta" }
-        Default   { "albus", "Gray" }
+    $colors = @{
+        info="Cyan"; done="Green"; warn="Yellow"; fail="Red"; step="Magenta"
     }
-    Write-Host "$P - " -NoNewline -ForegroundColor $C
+    $c = $colors[$Type]; if (-not $c) { $c = "Gray" }
+    Write-Host "$Type - " -NoNewline -ForegroundColor $c
     Write-Host $Msg.ToLower()
 }
 
-# environment setup
-if (-not (Test-Path $Env:InstallPath)) { $null = New-Item -Path $Env:InstallPath -ItemType Directory -Force }
+# ─── directory prep ─────────────────────────────────────────────────────────
+New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+# ─── defender exclusion (early) ─────────────────────────────────────────────
+try {
+    Add-MpPreference -ExclusionPath $InstallPath -ErrorAction Stop
+    Status "defender exclusion applied." "done"
+} catch {
+    Status "defender exclusion skipped." "warn"
+}
+
+# =============================================================================================================
+# .NET OPTIMIZATION (DIRECT - NO SCHEDULED TASKS)
+# =============================================================================================================
+
+Status "optimizing .net runtimes..." "info"
 
 try {
-    Add-MpPreference -ExclusionPath $Env:InstallPath -ErrorAction SilentlyContinue
-} catch {
-    Status "could not add defender exclusion. continuing anyway..." "warn"
-}
+    $ngen = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
 
-# .net framework optimization (ngen)
-Status "optimizing .net framework runtimes (ngen engine)..." "info"
-$dotNetTasks = Get-ScheduledTask -TaskPath "\Microsoft\Windows\.NET Framework\" -ErrorAction SilentlyContinue
-if ($dotNetTasks) {
-    foreach ($T in $dotNetTasks) {
-        if ($T.State -eq 'Disabled') { Enable-ScheduledTask -InputObject $T | Out-Null }
-        Start-ScheduledTask -InputObject $T | Out-Null
+    if (Test-Path "$ngen\ngen.exe") {
+        Push-Location $ngen
+
+        .\ngen.exe executeQueuedItems /nologo | Out-Null
+        .\ngen.exe update /nologo | Out-Null
+
+        Pop-Location
+        Status ".net ngen execution completed." "done"
+    } else {
+        Status "ngen not found, skipping." "warn"
     }
 }
-
-$ngenPath = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
-if (Test-Path "$ngenPath\ngen.exe") {
-    Set-Location $ngenPath
-    & ".\ngen.exe" executeQueuedItems /nologo | Out-Null
-    & ".\ngen.exe" update /nologo | Out-Null
+catch {
+    Status ".net optimization failed." "warn"
 }
 
-$StalePaths = @(
-    "$env:SystemRoot\Microsoft.NET\Framework\v4.0.30319\Temporary ASP.NET Files",
-    "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\Temporary ASP.NET Files"
-)
-foreach ($P in $StalePaths) { if (Test-Path $P) { Remove-Item $P -Recurse -Force -ErrorAction SilentlyContinue } }
-Status "net optimization cycle finished successfully." "done"
+# =============================================================================================================
+# MINSUDO INSTALL (CONTROLLED + RETRY)
+# =============================================================================================================
 
-
-# minsudo integration
 if (-not (Test-Path $MinSudoPath)) {
-    Status "minsudo not found. resolving latest binary..." "warn"
+
+    Status "resolving minsudo release..." "warn"
+
     try {
-        $Ref = Invoke-RestMethod -Uri "https://api.github.com/repos/M2Team/NanaRun/releases" -UseBasicParsing
-        $Asset = $Ref[0].assets | Where-Object Name -Match "\.zip$" | Select-Object -First 1
-        
-        if (-not $Asset) { throw "no valid minsudo archive found." }
+        $release = Invoke-RestMethod "https://api.github.com/repos/M2Team/NanaRun/releases"
+        $asset = $release[0].assets | Where-Object { $_.name -match "\.zip$" } | Select-Object -First 1
 
-        Status "downloading $($Asset.name)..." "info"
-        $TempZip = "$env:TEMP\nana.zip"
-        Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $TempZip -UseBasicParsing
-        
-        Status "extracting and integrating minsudo payload..." "info"
-        $TempDir = "$env:TEMP\nana_extract"
-        Expand-Archive -Path $TempZip -DestinationPath $TempDir -Force
+        if (-not $asset) { throw "release asset not found" }
 
-        $Exe = Get-ChildItem -Path $TempDir -Filter "MinSudo.exe" -Recurse | Where-Object FullName -Match "x64" | Select-Object -First 1
-        if (-not $Exe) { $Exe = Get-ChildItem -Path $TempDir -Filter "MinSudo.exe" -Recurse | Select-Object -First 1 }
-        
-        Move-Item -Path $Exe.FullName -Destination $MinSudoPath -Force
-        Remove-Item -Path $TempZip, $TempDir -Recurse -Force
-        Status "minsudo integrated successfully." "done"
-    } catch {
-        Status "minsudo installation failed: $($_.Exception.Message)" "fail"
-        Pause; Exit
+        Status "downloading $($asset.name)..." "info"
+        Invoke-WebRequest $asset.browser_download_url -OutFile $ZipPath
+
+        Status "extracting archive..." "info"
+        Expand-Archive $ZipPath -DestinationPath $TempDir -Force
+
+        $exe = Get-ChildItem $TempDir -Recurse -Filter "MinSudo.exe" |
+               Where-Object FullName -match "x64" |
+               Select-Object -First 1
+
+        if (-not $exe) {
+            $exe = Get-ChildItem $TempDir -Recurse -Filter "MinSudo.exe" | Select-Object -First 1
+        }
+
+        if (-not $exe) { throw "minsudo binary not found" }
+
+        # ─── retry move (defender race condition fix)
+        $success = $false
+        for ($i=0; $i -lt 6; $i++) {
+            if (Test-Path $exe.FullName) {
+                try {
+                    Move-Item $exe.FullName $MinSudoPath -Force
+                    $success = $true
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds 400
+                }
+            } else {
+                Start-Sleep -Milliseconds 400
+            }
+        }
+
+        if (-not $success) {
+            throw "failed to move minsudo (blocked or removed)"
+        }
+
+        Status "minsudo installed." "done"
+    }
+    catch {
+        Status "minsduo install failed: $($_.Exception.Message)" "fail"
+        exit
+    }
+    finally {
+        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-# trustedinstaller handoff
-Status "streaming latest engine from remote to memory..." "info"
-Status "handoff to trustedinstaller engine..." "step"
+# =============================================================================================================
+# EXECUTION (TRUSTEDINSTALLER HANDOFF)
+# =============================================================================================================
+
+Status "loading remote engine..." "info"
+Status "handoff -> trustedinstaller" "step"
+
 try {
-    $AlbusCmd = "iex (Invoke-RestMethod -Uri '$RepoURL' -UseBasicParsing)"
-    & $MinSudoPath -NoL -TI -P powershell.exe -NoProfile -NoLogo -NoExit -ExecutionPolicy Bypass -Command "$AlbusCmd"
-} catch {
-    Status "critical error: trustedinstaller elevation failed." "fail"
-    Pause
+    $cmd = "iex (Invoke-RestMethod '$RepoURL')"
+
+    & $MinSudoPath `
+        -NoL `
+        -TI `
+        -P powershell.exe `
+        -NoProfile `
+        -ExecutionPolicy Bypass `
+        -Command $cmd
+}
+catch {
+    Status "trustedinstaller execution failed." "fail"
 }
 
-Exit
-# =============================================================================================================================================================================
+exit
+
+# =============================================================================================================
