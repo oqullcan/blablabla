@@ -23,7 +23,7 @@ formats a usb with [ventoy](https://github.com/ventoy/Ventoy) and writes a zero-
 
 ## requirements
 
-- windows 10 (19041+) or windows 11 — x64
+- windows 11 — x64
 - powershell 5.1+
 - administrator (trustedinstaller via launcher)
 - internet optional — only needed for software downloads
