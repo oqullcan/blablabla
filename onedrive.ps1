@@ -98,18 +98,24 @@ $store = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore'
 $users = @('S-1-5-18')
 if (Test-Path $store) {
     $users += (Get-ChildItem $store -ErrorAction SilentlyContinue |
-               Where-Object { $_ -like '*S-1-5-21*' }).PSChildName
+               Where-Object { $_.PSChildName -like '*S-1-5-21*' }).PSChildName |
+               Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 }
 
+# Paket listelerini tek seferinde al — her turda sorgu atmak hem yavaş hem null riski yaratır
+$allProvisioned = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+$allAppx        = Get-AppxPackage -AllUsers   -ErrorAction SilentlyContinue
+
 foreach ($choice in $aiPackages) {
-    $provisioned = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
-                   Where-Object { $_.PackageName -like "*$choice*" }
-    $appxpkg     = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
-                   Where-Object { $_.PackageFullName -like "*$choice*" }
+    if ([string]::IsNullOrWhiteSpace($choice)) { continue }
+
+    $provisioned = @($allProvisioned | Where-Object { $_.PackageName    -like "*$choice*" })
+    $appxpkg     = @($allAppx        | Where-Object { $_.PackageFullName -like "*$choice*" })
 
     foreach ($appx in $provisioned) {
-        $pfn = ($appxpkg | Where-Object { $_.Name -eq $appx.DisplayName }).PackageFamilyName
-        if ($pfn) {
+        if (-not $appx -or [string]::IsNullOrWhiteSpace($appx.PackageName)) { continue }
+        $pfn = ($appxpkg | Where-Object { $_.Name -eq $appx.DisplayName } | Select-Object -First 1).PackageFamilyName
+        if (-not [string]::IsNullOrWhiteSpace($pfn)) {
             New-Item "$store\Deprovisioned\$pfn" -Force -ErrorAction SilentlyContinue | Out-Null
             Set-NonRemovableAppsPolicy -Online -PackageFamilyName $pfn -NonRemovable 0 -ErrorAction SilentlyContinue
         }
@@ -117,14 +123,17 @@ foreach ($choice in $aiPackages) {
     }
 
     foreach ($appx in $appxpkg) {
+        if (-not $appx -or [string]::IsNullOrWhiteSpace($appx.PackageFullName)) { continue }
         New-Item "$store\Deprovisioned\$($appx.PackageFamilyName)" -Force -ErrorAction SilentlyContinue | Out-Null
         Set-NonRemovableAppsPolicy -Online -PackageFamilyName $appx.PackageFamilyName -NonRemovable 0 -ErrorAction SilentlyContinue
         Remove-Item "$store\InboxApplications\$($appx.PackageFullName)" -Force -ErrorAction SilentlyContinue
         foreach ($uid in $appx.PackageUserInformation) {
+            if (-not $uid.UserSecurityID -or [string]::IsNullOrWhiteSpace($uid.UserSecurityID.SID)) { continue }
             New-Item "$store\EndOfLife\$($uid.UserSecurityID.SID)\$($appx.PackageFullName)" -Force -ErrorAction SilentlyContinue | Out-Null
             Remove-AppxPackage -Package $appx.PackageFullName -User $uid.UserSecurityID.SID -ErrorAction SilentlyContinue | Out-Null
         }
         foreach ($sid in $users) {
+            if ([string]::IsNullOrWhiteSpace($sid)) { continue }
             New-Item "$store\EndOfLife\$sid\$($appx.PackageFullName)" -Force -ErrorAction SilentlyContinue | Out-Null
         }
         Remove-AppxPackage -Package $appx.PackageFullName -AllUsers -ErrorAction SilentlyContinue | Out-Null
