@@ -102,9 +102,11 @@ if (Test-Path $store) {
                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 }
 
-# Paket listelerini tek seferinde al — her turda sorgu atmak hem yavaş hem null riski yaratır
-$allProvisioned = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
-$allAppx        = Get-AppxPackage -AllUsers   -ErrorAction SilentlyContinue
+# Paket listelerini tek seferinde al; null PackageName/PackageFullName olan itemları filtrele
+$allProvisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_.PackageName) })
+$allAppx        = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_.PackageFullName) })
 
 foreach ($choice in $aiPackages) {
     if ([string]::IsNullOrWhiteSpace($choice)) { continue }
