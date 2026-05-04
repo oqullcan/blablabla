@@ -1,126 +1,140 @@
-# ── onedrive ──────────────────────────────────────────────
-Write-Step 'removing onedrive'
+# ── edge ──────────────────────────────────────────────────
+Write-Step 'removing microsoft edge'
 
-function Remove-OneDrive {
+function Get-EdgeSetupPaths {
 
-    # HKU mount et
-    if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
-        New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
-    }
+    $paths = New-Object System.Collections.Generic.List[string]
 
-    $exePaths = New-Object System.Collections.Generic.List[string]
-
-    # fallback exe'ler (en güvenilir)
-    $fallbackPaths = @(
-        "$env:SystemRoot\System32\OneDriveSetup.exe",
-        "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
+    # canonical locations
+    $roots = @(
+        "$env:ProgramFiles (x86)\Microsoft\Edge\Application",
+        "$env:ProgramFiles\Microsoft\Edge\Application"
     )
 
-    # registry'den uninstall path çek
-    Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | ForEach-Object {
-
-        $sid = $_.PSChildName
-
-        # sadece gerçek user hive'ları targetla
-        if ($sid -notmatch '^S-1-5-21-') { return }
-
-        $regPath = "HKU:\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OneDriveSetup.exe"
-
-        try {
-            $uninstallStr = (Get-ItemProperty -Path $regPath -ErrorAction Stop).UninstallString
-        } catch {
-            $uninstallStr = $null
-        }
-
-        if ($uninstallStr) {
-
-            # --- SAFE PARSE ---
-            $exePath = $null
-
-            if ($uninstallStr -match '^"(.+?)"') {
-                $exePath = $matches[1]
-            } else {
-                $exePath = $uninstallStr.Split(' ')[0]
+    foreach ($root in $roots) {
+        if (Test-Path $root) {
+            Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $setup = Join-Path $_.FullName 'Installer\setup.exe'
+                if (Test-Path $setup) {
+                    $paths.Add($setup) | Out-Null
+                }
             }
-
-            if ($exePath -and (Test-Path $exePath)) {
-                $exePaths.Add($exePath) | Out-Null
-            }
-        }
-
-        # autorun temizle
-        Remove-ItemProperty `
-            -Path "HKU:\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
-            -Name 'OneDrive' `
-            -ErrorAction SilentlyContinue
-
-        # uninstall key temizle
-        Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    # fallback ekle
-    foreach ($f in $fallbackPaths) {
-        if (Test-Path $f) {
-            $exePaths.Add($f) | Out-Null
         }
     }
 
-    # unique
-    $exePaths = $exePaths | Select-Object -Unique
+    return $paths | Select-Object -Unique
+}
 
-    # uninstall çalıştır
-    foreach ($exe in $exePaths) {
+function Invoke-EdgeSetupUninstall {
+    param([string]$SetupPath)
+
+    try {
+        Write-Step "edge uninstall → $SetupPath"
+
+        Start-Process -FilePath $SetupPath `
+            -ArgumentList '--uninstall --system-level --force-uninstall --verbose-logging --delete-profile' `
+            -Wait -NoNewWindow | Out-Null
+
+    } catch {
+        Write-Step "edge uninstall failed: $_" 'warn'
+    }
+}
+
+function Remove-EdgeCore {
+
+    $setups = Get-EdgeSetupPaths
+
+    if (-not $setups -or $setups.Count -eq 0) {
+        Write-Step 'edge setup.exe not found, skipping' 'warn'
+        return
+    }
+
+    foreach ($s in $setups) {
+        Invoke-EdgeSetupUninstall $s
+    }
+}
+
+function Remove-WebView2 {
+
+    $wvPaths = @(
+        "$env:ProgramFiles (x86)\Microsoft\EdgeWebView\Application",
+        "$env:ProgramFiles\Microsoft\EdgeWebView\Application"
+    )
+
+    foreach ($root in $wvPaths) {
+        if (Test-Path $root) {
+            Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $setup = Join-Path $_.FullName 'Installer\setup.exe'
+                if (Test-Path $setup) {
+                    try {
+                        Write-Step "webview2 uninstall → $setup"
+                        Start-Process $setup `
+                            -ArgumentList '--uninstall --system-level --force-uninstall' `
+                            -Wait -NoNewWindow | Out-Null
+                    } catch {}
+                }
+            }
+        }
+    }
+}
+
+function Remove-EdgeUpdate {
+
+    $updateExe = "$env:ProgramFiles (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe"
+
+    if (Test-Path $updateExe) {
         try {
-            Write-Step "uninstalling onedrive → $exe"
-            Start-Process -FilePath $exe -ArgumentList '/uninstall' -Wait -NoNewWindow | Out-Null
+            Write-Step 'removing edge update'
+            Start-Process $updateExe -ArgumentList '/uninstall' -Wait -NoNewWindow | Out-Null
         } catch {}
     }
 
-    # ── provisioned package remove (çok önemli) ──
-    try {
-        Get-AppxProvisionedPackage -Online | Where-Object {
-            $_.DisplayName -like '*OneDrive*'
-        } | ForEach-Object {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue
-        }
-    } catch {}
-
-    # ── appx remove (user scope) ──
-    try {
-        Get-AppxPackage -AllUsers *OneDrive* | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    } catch {}
-
-    # ── user kalıntıları ──
-    Get-ChildItem "$env:SystemDrive\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-
-        $paths = @(
-            "$($_.FullName)\OneDrive",
-            "$($_.FullName)\AppData\Local\Microsoft\OneDrive",
-            "$($_.FullName)\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\OneDrive.lnk"
-        )
-
-        foreach ($p in $paths) {
-            if (Test-Path $p) {
-                Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-
-    # ── explorer sidebar kaldır ──
-    $clsid = '{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
-
-    try {
-        New-Item -Path "HKCR:\CLSID\$clsid" -Force | Out-Null
-        Set-ItemProperty -Path "HKCR:\CLSID\$clsid" -Name 'System.IsPinnedToNameSpaceTree' -Value 0 -Type DWord
-    } catch {}
-
-    # ── wow64 da temizle ──
-    try {
-        New-Item -Path "HKCR:\Wow6432Node\CLSID\$clsid" -Force | Out-Null
-        Set-ItemProperty -Path "HKCR:\Wow6432Node\CLSID\$clsid" -Name 'System.IsPinnedToNameSpaceTree' -Value 0 -Type DWord
-    } catch {}
-
-    Write-Step 'onedrive removal complete'
+    # scheduled tasks purge
+    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $_.TaskName -like '*EdgeUpdate*'
+    } | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 }
 
-Remove-OneDrive
+function Remove-EdgeShortcuts {
+
+    @(
+        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+        "$env:Public\Desktop",
+        "$env:UserProfile\Desktop"
+    ) | ForEach-Object {
+
+        $lnk = Join-Path $_ 'Microsoft Edge.lnk'
+        if (Test-Path $lnk) {
+            Remove-Item $lnk -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Block-EdgeReinstall {
+
+    # policy kill switch
+    $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'
+    New-Item $policy -Force | Out-Null
+
+    Set-ItemProperty $policy 'InstallDefault' 0 -Type DWord
+    Set-ItemProperty $policy 'DoNotUpdateToEdgeWithChromium' 1 -Type DWord
+    Set-ItemProperty $policy 'UpdateDefault' 0 -Type DWord
+
+    Write-Step 'edge reinstall blocked (policy)'
+}
+
+function Remove-Edge {
+
+    Stop-Process -Name msedge -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name msedgewebview2 -Force -ErrorAction SilentlyContinue
+
+    Remove-EdgeCore
+    Remove-WebView2
+    Remove-EdgeUpdate
+    Remove-EdgeShortcuts
+    Block-EdgeReinstall
+
+    Write-Step 'edge removal complete'
+}
+
+Remove-Edge
