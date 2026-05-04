@@ -28,23 +28,30 @@ function Invoke-AsTI {
 }
 
 # ── FIX: safe reg delete — key/value yoksa sessizce atlar ──
-# Reg.exe delete, var olmayan key/value için NativeCommandError fırlatır.
-# Bu wrapper önce query ile varlık kontrolü yapar, yoksa return eder.
+# $ErrorActionPreference='Stop' ortamında reg.exe query'nin non-zero exit code'u
+# NativeCommandError fırlatır. cmd /c wrapper + *>$null ile hem stdout/stderr
+# hem de PS hata akışı tamamen bastırılır; sadece $LASTEXITCODE kontrol edilir.
 function Invoke-RegDelete {
     param(
         [string]$Path,
         [string]$Value = ''
     )
-    if ($Value) {
-        reg.exe query $Path /v $Value 2>$null | Out-Null
-    } else {
-        reg.exe query $Path 2>$null | Out-Null
-    }
-    if ($LASTEXITCODE -ne 0) { return }
-    if ($Value) {
-        reg.exe delete $Path /v $Value /f *>$null
-    } else {
-        reg.exe delete $Path /f *>$null
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        if ($Value) {
+            cmd /c "reg.exe query `"$Path`" /v `"$Value`"" *>$null
+        } else {
+            cmd /c "reg.exe query `"$Path`"" *>$null
+        }
+        if ($LASTEXITCODE -ne 0) { return }
+        if ($Value) {
+            cmd /c "reg.exe delete `"$Path`" /v `"$Value`" /f" *>$null
+        } else {
+            cmd /c "reg.exe delete `"$Path`" /f" *>$null
+        }
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 
