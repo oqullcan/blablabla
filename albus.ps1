@@ -2327,7 +2327,7 @@ Write-Phase 'albusx service'
 $SvcName = 'AlbusXSvc'
 $ExePath  = "$env:SystemRoot\AlbusX.exe"
 $CSPath   = "$env:SystemRoot\AlbusX.cs"
-$SrcURL   = 'https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/albus/albus.cs'
+$SrcURL   = 'https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/albus/albus-experimental.cs'
 
 $CSC = $null
 $dotnetFW = "$env:windir\Microsoft.NET\Framework64"
@@ -2391,7 +2391,7 @@ if (Test-Path $ExePath) {
     New-Service -Name $SvcName `
         -BinaryPathName $ExePath `
         -DisplayName 'AlbusX' `
-        -Description 'albus core engine 1.0 — precision timer, audio latency, memory.' `
+        -Description 'Albus core engine.' `
         -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
 
     sc.exe failure $SvcName reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
