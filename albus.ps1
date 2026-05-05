@@ -837,7 +837,8 @@ Set-Regs @(
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager'; Name = 'ShippedWithReserves'; Value = 0 }
     # media player automatic update
     @{ Path = 'HKLM:\Software\Policies\Microsoft\WindowsMediaPlayer'; Name = 'DisableAutoUpdate'; Value = 0 }
-    # block silent installation of devhome and outlook
+    # block silent installation of copilot, devhome and outlook
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\CopilotUpdate'; Name = 'workCompleted'; Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate'; Name = 'workCompleted'; Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate'; Name = 'workCompleted'; Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe'; Name = 'BlockedOobeUpdaters'; Value = '["MS_Outlook"]'; Type = 'String' }
@@ -974,6 +975,8 @@ Set-Regs @(
 
 Write-Step '8.2 — copilot & ai (disable)'
 Set-Regs @(
+    # copilot
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft.Copilot'; Name = 'NoRemove'; Value = '-' }
     @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot';  Name = 'TurnOffWindowsCopilot';  Value = 1 }
     @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot';  Name = 'TurnOffWindowsCopilot';  Value = 1 }
     @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowCopilotButton'; Value = 0 }
