@@ -17,7 +17,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 #  ── constants ─────────────────────────────────────────
 
 $ALBUS_DIR     = 'C:\Albus'
-$ALBUS_LOG     = "$ALBUS_DIR\albus.log"
+$ALBUS_LOG     = "$ALBUS_DIR\Albus.log"
 $ALBUS_VERSION = '7.0'
 $TODAY         = Get-Date
 
@@ -302,7 +302,6 @@ function Set-AppPackageSettings {
 
 function Test-Network { return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue) }
 
-<#
 # ── phase 1 · debloat | aggressively uninstalls uwp bloatware, optional features, onedrive, and executes a total structural purge of microsoft edge.
 
 Write-Phase 'debloat'
@@ -325,7 +324,7 @@ $keepList = @(
     '*Microsoft.Windows.StartMenuExperienceHost*'
     '*Microsoft.WindowsCalculator*'
     '*Microsoft.WindowsNotepad*'
-    '*Microsoft.WindowsStore*'
+    # '*Microsoft.WindowsStore*'
     '*Windows.ImmersiveControlPanel*'
     '*NVIDIACorp.NVIDIAControlPanel*'
 )
@@ -408,11 +407,7 @@ function Remove-MicrosoftEdge {
     }
 
     # Write-Step 'disabling edge tasks & services' 'run'
-    @('\MicrosoftEdgeUpdateTaskMachineCore',
-      '\MicrosoftEdgeUpdateTaskMachineUA',
-      '\MicrosoftEdgeUpdateTaskMachineCoreSystem',
-      '\MicrosoftEdgeUpdateBrowserReplacementTask'
-    ) | ForEach-Object {
+    @('\MicrosoftEdgeUpdateTaskMachineCore','\MicrosoftEdgeUpdateTaskMachineUA','\MicrosoftEdgeUpdateTaskMachineCoreSystem','\MicrosoftEdgeUpdateBrowserReplacementTask') | ForEach-Object {
         try { Disable-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue | Out-Null } catch {}
         try { Unregister-ScheduledTask -TaskName $_ -Confirm:$false -ErrorAction SilentlyContinue } catch {}
         $tn = $_.TrimStart('\')
@@ -1186,9 +1181,8 @@ switch -regex ($selection) {
     }
 }
 
-#>
-
 # ── phase 4 · registry | overwrites ~400 keys covering boot optimizations, prefetch, uac, defender, edge policies, and visual effects.
+
 
 Write-Phase 'services'
 
@@ -1308,7 +1302,6 @@ foreach ($path in $paths) {
 Write-Done 'scheduled tasks'
 
 Write-Phase 'network configuration'
-
 Write-Step 'optimizing network interface settings'
 $ActiveNICs = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
 if ($ActiveNICs) {
@@ -1364,7 +1357,7 @@ foreach ($NIC in $ActiveNICs) {
 
 Write-Step 'configuring tcp/ip stack'
 $tcp = @(
-    'autotuninglevel=normal',
+    'autotuninglevel=disabled',
     'ecncapability=disabled',
     'timestamps=disabled',
     'initialRto=2000',
@@ -1378,5 +1371,661 @@ netsh int tcp set supplemental template=internet congestionprovider=cubic | Out-
 
 Write-Done 'network configuration'
 
-# phase 
-# 
+# phase
+
+Write-Phase 'power plan'
+
+$PowerBase      = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes'
+$PowerSaverGUID = 'a1841308-3541-4fab-bc81-f71556f20b4a'
+$UltimateGUID   = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+$HighPerfGUID   = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+$AlbusGUID      = '6f71756c-6c63-616e-8000-010101010101'
+
+# reset & safe base
+Write-Step 'resetting power schemes'
+powercfg.exe -restoredefaultschemes *>$null
+cmd.exe /c "powercfg /setactive $PowerSaverGUID >NUL 2>&1"
+
+# import ultimate performance silently
+Write-Step 'importing ultimate performance base'
+cmd.exe /c "powercfg /duplicatescheme $UltimateGUID >NUL 2>&1"
+
+# remove old albus plan
+cmd.exe /c "powercfg /delete $AlbusGUID >NUL 2>&1"
+if (Test-Path "$PowerBase\$AlbusGUID") {
+    Remove-Item "$PowerBase\$AlbusGUID" -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# determine source: ultimate or high performance
+$SourceGUID = if (Test-Path "$PowerBase\$UltimateGUID") { $UltimateGUID } else { $HighPerfGUID }
+Write-Step "base plan: $SourceGUID"
+
+# copy source plan structure to albus via registry
+function Copy-RegistryKey {
+    param([string]$Src, [string]$Dst)
+    $srcKey = Get-Item $Src -ErrorAction SilentlyContinue
+    if (-not $srcKey) { return }
+    New-Item $Dst -Force -ErrorAction SilentlyContinue | Out-Null
+    foreach ($val in $srcKey.GetValueNames()) {
+        $data = $srcKey.GetValue($val, $null, 'DoNotExpandEnvironmentNames')
+        $kind = $srcKey.GetValueKind($val)
+        Set-ItemProperty -Path $Dst -Name $val -Value $data -Type $kind -ErrorAction SilentlyContinue
+    }
+    foreach ($sub in $srcKey.GetSubKeyNames()) {
+        Copy-RegistryKey "$Src\$sub" "$Dst\$sub"
+    }
+}
+
+Write-Step 'building albus plan structure'
+Copy-RegistryKey "$PowerBase\$SourceGUID" "$PowerBase\$AlbusGUID"
+Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'FriendlyName' -Value 'albus 7.0'                                         -Type String -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "$PowerBase\$AlbusGUID" -Name 'Description'  -Value 'minimal latency, unparked cores, peak throughput.' -Type String -ErrorAction SilentlyContinue
+
+# remove all unnecessary plans
+Write-Step 'removing unnecessary power plans'
+[regex]::Matches((powercfg /l | Out-String), '[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}', 'IgnoreCase') | ForEach-Object {
+    if ($_.Value -notin @($AlbusGUID, $PowerSaverGUID)) {
+        cmd.exe /c "powercfg /delete $($_.Value) >NUL 2>&1"
+    }
+}
+
+# unlock all hidden power settings
+Write-Step 'unlocking hidden power settings'
+Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Property -contains 'Attributes') {
+        Set-ItemProperty -Path $_.PSPath -Name 'Attributes' -Value 0 -ErrorAction SilentlyContinue
+    }
+}
+
+# apply albus power settings directly via registry
+Write-Step 'applying albus power settings'
+
+function Set-PowerSetting {
+    param([string]$Plan, [string]$SubGroup, [string]$Setting, [int]$AC, [int]$DC)
+    $base = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\$Plan\$SubGroup\$Setting"
+    if (-not (Test-Path $base)) { New-Item $base -Force -ErrorAction SilentlyContinue | Out-Null }
+    Set-ItemProperty $base -Name 'ACSettingIndex' -Value $AC -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty $base -Name 'DCSettingIndex' -Value $DC -Type DWord -ErrorAction SilentlyContinue
+}
+
+# disk
+Set-PowerSetting $AlbusGUID '0012ee47-9041-4b5d-9b77-535fba8b1442' '6738e2c4-e8a5-4a42-b16a-e040e769756e' 0   0    # disk turn off (never)
+# desktop slideshow
+Set-PowerSetting $AlbusGUID '0d7dbae2-4294-402a-ba8e-26777e8488cd' '309dce9b-bef4-4119-9921-a851fb12f0f4' 1   1    # paused
+# wireless
+Set-PowerSetting $AlbusGUID '19cbb8fa-5279-450e-9fac-8a3d5fedd0c1' '12bbebe6-58d6-4636-95bb-3217ef867c1a' 0   0    # max perf
+# sleep
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' 0   0    # sleep after: never
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '94ac6d29-73ce-41a6-809f-6363ba21b47e' 0   0    # hybrid sleep off
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' '9d7815a6-7ee4-497e-8888-515a05f02364' 0   0    # hibernate after: never
+Set-PowerSetting $AlbusGUID '238c9fa8-0aad-41ed-83f4-97be242c8f20' 'bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d' 0   0    # wake timers off
+# usb
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' '0853a681-27c8-4100-a2fd-82013e970683' 0   0    # hub suspend timeout
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' '48e6b7a6-50f5-4782-a5d4-53bb8f07e226' 0   0    # selective suspend off
+Set-PowerSetting $AlbusGUID '2a737441-1930-4402-8d77-b2bebba308a3' 'd4e98f31-5ffe-4ce1-be31-1b38b384c009' 0   0    # usb3 link power off
+# power button
+Set-PowerSetting $AlbusGUID '4f971e89-eebd-4455-a8de-9e59040e7347' 'a7066653-8d6c-40a8-910e-a1f54b84c7e5' 2   2    # shutdown
+# pcie
+Set-PowerSetting $AlbusGUID '501a4d13-42af-4429-9fd1-a8218c268e20' 'ee12f906-d277-404b-b6da-e5fa1a576df5' 0   0    # link state off
+# cpu
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '893dee8e-2bef-41e0-89c6-b55d0929964c' 100 100  # min cpu state
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' 'bc5038f7-23e0-4960-96da-33abaf5935ec' 100 100  # max cpu state
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '0cc5b647-c1df-4637-891a-dec35c318583' 100 100  # core parking min
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' 'ea062031-0e34-4ff1-9b6d-eb1059334028' 100 100  # core parking max
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '94d3a615-a899-4ac5-ae2b-e4d8f634367f' 1   1    # cooling active
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '36687f9e-e3a5-4dbf-b1dc-15eb381c6863' 0   0    # energy perf pref
+Set-PowerSetting $AlbusGUID '54533251-82be-4824-96c1-47b60b740d00' '93b8b6dc-0698-4d1c-9ee4-0644e900c85d' 0   0    # heterogeneous scheduling
+# display
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e' 600 600  # timeout 10m
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'aded5e82-b909-4619-9949-f5d71dac0bcb' 100 100  # brightness
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'f1fbfde2-a960-4165-9f88-50667911ce96' 100 100  # dimmed brightness
+Set-PowerSetting $AlbusGUID '7516b95f-f776-4464-8c53-06167f40cc99' 'fbd9aa66-9553-4097-ba44-ed6e9d65eab8' 0   0    # adaptive brightness off
+# video
+Set-PowerSetting $AlbusGUID '9596fb26-9850-41fd-ac3e-f7c3c00afd4b' '10778347-1370-4ee0-8bbd-33bdacaade49' 1   1    # quality bias
+Set-PowerSetting $AlbusGUID '9596fb26-9850-41fd-ac3e-f7c3c00afd4b' '34c7b99f-9a6d-4b3c-8dc7-b6693b78cef4' 0   0    # optimize quality
+# graphics
+Set-PowerSetting $AlbusGUID '44f3beca-a7c0-460e-9df2-bb8b99e0cba6' '3619c3f2-afb2-4afc-b0e9-e7fef372de36' 2   2    # intel max perf
+Set-PowerSetting $AlbusGUID 'c763b4ec-0e50-4b6b-9bed-2b92a6ee884e' '7ec1751b-60ed-4588-afb5-9819d3d77d90' 3   3    # amd best perf
+Set-PowerSetting $AlbusGUID 'f693fb01-e858-4f00-b20f-f30e12ac06d6' '191f65b5-d45c-4a4f-8aae-1ab8bfd980e6' 1   1    # ati max perf
+Set-PowerSetting $AlbusGUID 'e276e160-7cb0-43c6-b20b-73f5dce39954' 'a1662ab2-9d34-4e53-ba8b-2639b9e20857' 3   3    # switchable dynamic
+# battery
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '5dbb7c9f-38e9-40d2-9749-4f8a0e9f640f' 0   0    # crit notif off
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '637ea02f-bbcb-4015-8e2c-a1c7b9c0b546' 0   0    # crit action nothing
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '8183ba9a-e910-48da-8769-14ae6dc1170a' 0   0    # low level 0
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' '9a66d8d7-4ff7-4ef9-b5a2-5a326ca2a469' 0   0    # crit level 0
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'bcded951-187b-4d05-bccc-f7e51960c258' 0   0    # low notif off
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'd8742dcb-3e6a-4b3c-b3fe-374623cdcf06' 0   0    # low action nothing
+Set-PowerSetting $AlbusGUID 'e73a048d-bf27-4f12-9731-8b2076e8891f' 'f3c5027d-cd16-4930-aa6b-90db844a8f00' 0   0    # reserve level 0
+Set-PowerSetting $AlbusGUID 'de830923-a562-41af-a086-e3a2c6bad2da' '13d09884-f74e-474a-a852-b6bde8ad03a8' 100 100  # battery saver brightness off
+Set-PowerSetting $AlbusGUID 'de830923-a562-41af-a086-e3a2c6bad2da' 'e69653ca-cf7f-4f05-aa73-cb833fa90ad4' 0   0    # battery saver auto never
+
+# activate albus
+Write-Step 'activating albus power plan'
+cmd.exe /c "powercfg /setactive $AlbusGUID >NUL 2>&1"
+if ($LASTEXITCODE -ne 0) {
+    Set-ItemProperty -Path $PowerBase -Name 'ActivePowerScheme' -Value $AlbusGUID -Type String -ErrorAction SilentlyContinue
+}
+
+# hibernate
+Write-Step 'disabling hibernate'
+powercfg.exe /hibernate off *>$NULL
+$PwrKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power'
+Set-Reg $PwrKey 'HibernateEnabled'        0
+Set-Reg $PwrKey 'HibernateEnabledDefault' 0
+
+# fast boot
+Write-Step 'disabling fast boot'
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled' 0
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'             'HiberbootEnabled' 0
+
+# power throttling
+Write-Step 'disabling power throttling'
+$ThrottleKey = "$PwrKey\PowerThrottling"
+if (-not (Test-Path $ThrottleKey)) { New-Item $ThrottleKey -Force | Out-Null }
+Set-Reg $ThrottleKey 'PowerThrottlingOff' 1
+
+# modern standby
+Write-Step 'disabling modern standby'
+Set-Reg 'HKLM:\System\CurrentControlSet\Control\Power' 'PlatformAoAcOverride' 0
+
+# sleep study
+Write-Step 'disabling sleep study reporting'
+cmd.exe /c "wevtutil sl Microsoft-Windows-SleepStudy/Diagnostic /q:false >NUL 2>&1"
+cmd.exe /c "wevtutil sl Microsoft-Windows-Kernel-Processor-Power/Diagnostic /q:false >NUL 2>&1"
+cmd.exe /c "wevtutil sl Microsoft-Windows-UserModePowerService/Diagnostic /q:false >NUL 2>&1"
+Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' 'SleepStudyDisabled' 1
+
+# flyout
+Write-Step 'removing sleep & lock from start menu'
+$FlyoutKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings'
+if (-not (Test-Path $FlyoutKey)) { New-Item $FlyoutKey -Force | Out-Null }
+Set-Reg $FlyoutKey 'ShowLockOption'  0
+Set-Reg $FlyoutKey 'ShowSleepOption' 0
+
+Write-Step "albus power plan active [$AlbusGUID]" 'ok'
+Write-Done 'power plan'
+
+Write-Phase 'hardware tuning'
+
+# 8.1  ghost device removal
+Write-Step 'cleaning up ghost devices'
+Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.Present -and $_.InstanceId -notmatch '^(ROOT|SWD|HTREE|DISPLAY|BTHENUM)\\' } |
+    ForEach-Object {
+        pnputil /remove-device $_.InstanceId /quiet | Out-Null
+    }
+
+# 8.2  msi interrupt mode
+Write-Step 'enabling msi mode for pci devices'
+Get-PnpDevice -InstanceId 'PCI\*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -match '^(OK|Unknown)$' } |
+    ForEach-Object {
+        $base = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.InstanceId)\Device Parameters"
+        Set-Reg "$base\Interrupt Management\MessageSignaledInterruptProperties" 'MSISupported' 1
+        if ($_.Class -eq 'Display') {
+            Remove-ItemProperty -Path "$base\Interrupt Management\Affinity Policy" -Name 'DevicePriority' -ErrorAction SilentlyContinue
+        }
+    }
+
+# 8.3  disk write cache
+Write-Step 'enabling aggressive disk write caching'
+Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue |
+    Where-Object { $_.InterfaceType -ne 'USB' -and $_.PNPDeviceID } |
+    ForEach-Object {
+        $p = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\Disk"
+        Set-Reg $p 'UserWriteCacheSetting' 1
+        Set-Reg $p 'CacheIsPowerProtected' 1
+        Set-Reg $p 'EnablePowerManagement' 0
+    }
+
+# 8.4  disable device power saving
+Write-Step 'disabling device power saving states'
+$PowerKeys = @('SelectiveSuspendEnabled', 'SelectiveSuspendOn', 'EnhancedPowerManagementEnabled', 'WaitWakeEnabled','DeviceIdleEnabled','AllowIdleIrpInD3','EnablePowerManagement','EnableSelectiveSuspend','DeviceIdleIgnoreWakeEnable')
+Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -match '^(OK|Unknown)$' } |
+    ForEach-Object {
+        $p = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.InstanceId)\Device Parameters"
+        Set-Reg "$p\WDF" 'IdleInWorkingState' 0
+        foreach ($key in $PowerKeys) { Set-Reg $p $key 0 }
+    }
+Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object { $_.InstanceId -like '*USB\ROOT*' -or $_.InstanceId -like '*USB\VID*' } |
+    ForEach-Object {
+        $id = $_.InstanceId
+        Get-CimInstance -ClassName MSPower_DeviceEnable -Namespace root\wmi -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$id*" } |
+            ForEach-Object {
+                Set-CimInstance -InputObject $_ -Property @{ Enable = $true } -ErrorAction SilentlyContinue
+            }
+        Get-CimInstance -ClassName MSPower_DeviceWakeEnable -Namespace root\wmi -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$id*" } |
+            ForEach-Object {
+                Set-CimInstance -InputObject $_ -Property @{ Enable = $false } -ErrorAction SilentlyContinue
+            }
+    }
+
+# dma remapping & kernel guard
+Write-Step 'optimizing dma remapping & kernel guard policy'
+Set-Reg 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\DmaGuard\DeviceEnumerationPolicy' 'value' 2
+Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction SilentlyContinue | ForEach-Object {
+    $p = "$($_.Name.Replace('HKEY_LOCAL_MACHINE', 'HKLM:'))\Parameters"
+    if ((Get-ItemProperty $p -Name 'DmaRemappingCompatible' -ErrorAction SilentlyContinue) -ne $null) {
+        Set-Reg $p 'DmaRemappingCompatible' 0
+    }
+}
+
+# 8.5  exploit guard — disable system-wide mitigations for peak performance
+Write-Step 'disabling exploit guard & mitigations'
+$Mitigations = (Get-Command 'Set-ProcessMitigation' -ErrorAction SilentlyContinue).Parameters['Disable'].Attributes.ValidValues
+if ($Mitigations) {
+    Set-ProcessMitigation -SYSTEM -Disable $Mitigations -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null
+}
+
+$KernelPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel'
+$auditLen   = try { (Get-ItemProperty $KernelPath 'MitigationAuditOptions' -ErrorAction Stop).MitigationAuditOptions.Length } catch { 38 }
+
+[byte[]]$mitigPayload = ,[byte]34 * $auditLen
+
+$CriticalProcs = @(
+    'fontdrvhost.exe', 'dwm.exe', 'lsass.exe', 'svchost.exe', 'WmiPrvSE.exe', 'winlogon.exe', 'csrss.exe', 'audiodg.exe', 'services.exe', 'explorer.exe', 'taskhostw.exe', 'sihost.exe'
+)
+
+foreach ($proc in $CriticalProcs) {
+    $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$proc"
+    Set-Reg $ifeoPath 'MitigationOptions' $mitigPayload 'Binary'
+    Set-Reg $ifeoPath 'MitigationAuditOptions' $mitigPayload 'Binary'
+}
+
+Set-Reg $KernelPath 'MitigationOptions' $mitigPayload 'Binary'
+Set-Reg $KernelPath 'MitigationAuditOptions' $mitigPayload 'Binary'
+
+$MemMgmt = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+
+# meltdown & spectre (cve-2017-5754, cve-2017-5715)
+Write-Step 'disabling meltdown & spectre mitigations'
+Set-Reg -Path $MemMgmt -Name 'FeatureSettings'             -Value 1
+Set-Reg -Path $MemMgmt -Name 'FeatureSettingsOverride'     -Value 3
+Set-Reg -Path $MemMgmt -Name 'FeatureSettingsOverrideMask' -Value 3
+
+# intel tsx (transaction synchronization extensions)
+# downfall
+if ((Get-CimInstance Win32_Processor -EA 0).Manufacturer -match 'Intel') {
+    Set-Reg $KernelPath 'DisableTSX' 0
+    Set-Reg $KernelPath 'DisableGatherDataSampling' 1
+} else {
+    Remove-ItemProperty -Path $KernelPath -Name 'DisableTSX' -EA 0
+}
+
+Write-Done 'hardware tuning'
+
+Write-Phase 'filesystem & boot'
+
+Write-Step 'ntfs'
+fsutil behavior set disable8dot3 1 | Out-Null
+fsutil behavior set disabledeletenotify 0 | Out-Null
+fsutil behavior set disablelastaccess 1 | Out-Null
+
+Write-Step 'bcdedit'
+bcdedit /timeout 10 | Out-Null
+bcdedit /deletevalue useplatformclock | Out-Null
+bcdedit /deletevalue useplatformtick | Out-Null
+bcdedit /set bootux disabled | Out-Null
+bcdedit /set bootmenupolicy legacy | Out-Null
+bcdedit /set tscsyncpolicy Default | Out-Null
+bcdedit /set quietboot yes | Out-Null
+bcdedit /set {globalsettings} custom:16000067 true | Out-Null
+bcdedit /set {globalsettings} custom:16000069 true | Out-Null
+bcdedit /set {globalsettings} custom:16000068 true | Out-Null
+bcdedit /set '{current}' description 'Albus 6.2' | Out-Null
+label C: Albus | Out-Null
+
+Write-Step 'disable memory compression'
+Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue | Out-Null
+
+Write-Step 'winevt diagnostic channels'
+Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels' -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        $ep = Get-ItemProperty -Path $_.PSPath -Name 'Enabled' -ErrorAction SilentlyContinue
+        if ($ep -and $ep.Enabled -eq 1) {
+            Set-ItemProperty -Path $_.PSPath -Name 'Enabled' -Value 0 -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+Write-Step 'safe mode msiserver'
+Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Minimal\MSIServer' '' 'Service' 'String'
+Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Network\MSIServer' '' 'Service' 'String'
+
+Write-Done 'filesystem & boot'
+
+Write-Phase 'ui'
+
+# black wallpaper & lock screen
+Write-Step 'generating true black wallpaper'
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing -ErrorAction SilentlyContinue
+$BlackFile = "$env:SystemRoot\Albus.jpg"
+if (-not (Test-Path $BlackFile)) {
+    try {
+        $sw  = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Width
+        $sh  = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Height
+        $bmp = New-Object System.Drawing.Bitmap $sw, $sh
+        $g   = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.FillRectangle([System.Drawing.Brushes]::Black, 0, 0, $sw, $sh)
+        $g.Dispose(); $bmp.Save($BlackFile); $bmp.Dispose()
+    } catch { Write-Step 'wallpaper generation failed' 'warn' }
+}
+
+Write-Step 'applying black theme'
+Set-Regs @(
+    @{ Path = 'HKCU:\Control Panel\Colors';                                          Name = 'Background';               Value = '0 0 0';    Type = 'String' }
+    @{ Path = 'HKCU:\Control Panel\Desktop';                                         Name = 'WallPaper';                Value = '';         Type = 'String' }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers'; Name = 'BackgroundType';           Value = 1 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize';  Name = 'AppsUseLightTheme';        Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize';  Name = 'SystemUsesLightTheme';     Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize';  Name = 'EnableTransparency';       Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize';  Name = 'ColorPrevalence';          Value = 1 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent';     Name = 'AccentColorMenu';          Value = 0 }
+    @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent';     Name = 'StartColorMenu';           Value = 0 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\DWM';                                Name = 'AccentColor';              Value = -15132391 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\DWM';                                Name = 'ColorizationAfterglow';    Value = -1004988135 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\DWM';                                Name = 'ColorizationColor';        Value = -1004988135 }
+    @{ Path = 'HKCU:\Software\Microsoft\Windows\DWM';                                Name = 'EnableWindowColorization'; Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP';  Name = 'LockScreenImagePath';      Value = $BlackFile; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP';  Name = 'LockScreenImageStatus';    Value = 1 }
+)
+Set-Reg 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent' 'AccentPalette' ([byte[]](
+    0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00
+)) 'Binary'
+
+# blackout account pictures
+Write-Step 'blacking out account pictures'
+@(
+    "$env:ProgramData\Microsoft\User Account Pictures"
+    "$env:AppData\Microsoft\Windows\AccountPictures"
+) | ForEach-Object {
+    if (-not (Test-Path $_)) { return }
+    Get-ChildItem $_ -Include *.png,*.bmp,*.jpg -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $img = [System.Drawing.Bitmap]::FromFile($_.FullName)
+            $w = $img.Width; $h = $img.Height; $img.Dispose()
+            $new = New-Object System.Drawing.Bitmap $w, $h
+            $g   = [System.Drawing.Graphics]::FromImage($new)
+            $g.Clear([System.Drawing.Color]::Black); $g.Dispose()
+            $fmt = switch ($_.Extension.ToLower()) {
+                '.png' { [System.Drawing.Imaging.ImageFormat]::Png }
+                '.bmp' { [System.Drawing.Imaging.ImageFormat]::Bmp }
+                default { [System.Drawing.Imaging.ImageFormat]::Jpeg }
+            }
+            $new.Save($_.FullName, $fmt); $new.Dispose()
+        } catch {}
+    }
+}
+
+cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer`" /v `"NoCustomizeThisFolder`" /t REG_DWORD /d `"1`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\Folder\shell\pintohome`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\*\shell\pintohomefile`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\exefile\shellex\ContextMenuHandlers\Compatibility`" /f >nul 2>&1"
+cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked`" /v `"{9F156763-7844-4DC4-B2B1-901F640F5155}`" /t REG_SZ /d `"`" /f >nul 2>&1"
+cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked`" /v `"{09A47860-11B0-4DA5-AFA5-26D86198A780}`" /t REG_SZ /d `"`" /f >nul 2>&1"
+cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked`" /v `"{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}`" /t REG_SZ /d `"`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\Folder\ShellEx\ContextMenuHandlers\Library Location`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\AllFilesystemObjects\shellex\ContextMenuHandlers\ModernSharing`" /f >nul 2>&1"
+cmd /c "reg add `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`" /v `"NoPreviousVersionsPage`" /t REG_DWORD /d `"1`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo`" /f >nul 2>&1"
+cmd /c "reg delete `"HKCR\UserLibraryFolder\shellex\ContextMenuHandlers\SendTo`" /f >nul 2>&1"
+
+Set-Regs @(
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer';        Name = 'NoCustomizeThisFolder';                Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer';                 Name = 'NoPreviousVersionsPage';               Value = 1 }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{9F156763-7844-4DC4-B2B1-901F640F5155}'; Value = ''; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{09A47860-11B0-4DA5-AFA5-26D86198A780}'; Value = ''; Type = 'String' }
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}'; Value = ''; Type = 'String' }
+)
+
+# start menu
+Write-Step 'configuring start menu'
+$start2 = "$env:LOCALAPPDATA\Packages\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\LocalState\start2.bin"
+Remove-Item $start2 -Force -ErrorAction SilentlyContinue
+[System.IO.File]::WriteAllBytes($start2, [Convert]::FromBase64String("AgAAABAAAAD9////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="))
+Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start' 'AllAppsViewMode' 2
+
+# taskbar unpin
+Write-Step 'unpinning taskbar items'
+Set-Reg '-HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband' '' ''
+Remove-Item "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch" -Recurse -Force -ErrorAction SilentlyContinue
+
+# tray icons — promote all
+Write-Step 'promoting all tray icons'
+Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -Recurse -ErrorAction SilentlyContinue |
+    ForEach-Object { Set-ItemProperty -Path $_.PSPath -Name 'IsPromoted' -Value 1 -Force -ErrorAction SilentlyContinue }
+
+# accessibility folders — hide
+Write-Step 'hiding accessibility folders'
+@(
+    "$env:Appdata\Microsoft\Windows\Start Menu\Programs\Accessibility"
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessibility"
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Accessories"
+) | ForEach-Object {
+    if (Test-Path $_) { attrib +h "$_" /s /d *>$null }
+}
+
+# shell refresh
+Write-Step 'refreshing shell'
+rundll32.exe user32.dll, UpdatePerUserSystemParameters
+Stop-Process -Force -Name explorer -ErrorAction SilentlyContinue
+
+Write-Step 'ui applied' 'ok'
+Write-Done 'ui'
+
+Write-Phase 'startup cleanup'
+
+@('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce',
+  'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+  'HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce') | ForEach-Object {
+    if (Test-Path $_) {
+        Get-Item $_ | ForEach-Object {
+            $keyPath = $_.PSPath
+            $_.GetValueNames() | ForEach-Object {
+                Remove-ItemProperty -Path $keyPath -Name $_ -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+@("$env:AppData\Microsoft\Windows\Start Menu\Programs\Startup",
+  "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp") | ForEach-Object {
+    if (Test-Path $_) { Remove-Item "$_\*" -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Step 'startup entries cleared' 'ok'
+Write-Done 'startup cleanup'
+
+#  PHASE 10 · ALBUSX SERVICE
+Write-Phase 'albusx service'
+$SvcName = 'AlbusXSvc'
+$ExePath  = "$env:SystemRoot\AlbusX.exe"
+$CSPath   = "$env:SystemRoot\AlbusX.cs"
+$SrcURL   = 'https://raw.githubusercontent.com/oqullcan/albuswin/refs/heads/main/albus/albus-experimental.cs'
+
+$CSC = $null
+$dotnetFW = "$env:windir\Microsoft.NET\Framework64"
+if (Test-Path $dotnetFW) {
+    $CSC = Get-ChildItem "$dotnetFW\v*\csc.exe" -ErrorAction SilentlyContinue |
+           Sort-Object { [version]($_.Directory.Name -replace '^v','') } -Descending |
+           Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $CSC) {
+    $dotnetFW32 = "$env:windir\Microsoft.NET\Framework"
+    $CSC = Get-ChildItem "$dotnetFW32\v*\csc.exe" -ErrorAction SilentlyContinue |
+           Sort-Object { [version]($_.Directory.Name -replace '^v','') } -Descending |
+           Select-Object -First 1 -ExpandProperty FullName
+}
+Write-Step ("csc path: " + $(if ($CSC) { $CSC } else { 'NOT FOUND' }))
+
+$svc = Get-Service $SvcName -ErrorAction SilentlyContinue
+if ($svc) {
+    if ($svc.Status -ne 'Stopped') {
+        Stop-Service $SvcName -Force -ErrorAction SilentlyContinue
+        Start-Sleep 2
+    }
+    sc.exe delete $SvcName | Out-Null
+    Start-Sleep 2
+}
+
+Get-Process -Name 'AlbusX' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
+Start-Sleep 1
+
+if (Test-Network) {
+    Write-Step 'fetching albusx source'
+    try {
+        Get-File $SrcURL $CSPath
+        if (-not (Test-Path $CSPath)) { throw 'dosya indirilmedi' }
+    } catch {
+        Write-Step "source fetch failed: $_" 'warn'
+    }
+}
+
+if ((Test-Path $CSPath) -and $CSC) {
+    Write-Step 'compiling albusx'
+    $compileOutput = & $CSC `
+        -r:System.ServiceProcess.dll `
+        -r:System.Configuration.Install.dll `
+        -r:System.Management.dll `
+        -out:"$ExePath" "$CSPath" 2>&1
+
+    if (-not (Test-Path $ExePath)) {
+        Write-Step 'compilation FAILED — errors below' 'warn'
+        $compileOutput | ForEach-Object { Write-Step "  $_" 'warn' }
+    } else {
+        Write-Step 'compilation ok'
+    }
+    Remove-Item $CSPath -Force -ErrorAction SilentlyContinue
+} elseif (-not $CSC) {
+    Write-Step 'csc.exe not found — .NET Framework 4.x is not installed' 'warn'
+}
+
+if (Test-Path $ExePath) {
+    New-Service -Name $SvcName `
+        -BinaryPathName $ExePath `
+        -DisplayName 'AlbusX' `
+        -Description 'Albus core engine.' `
+        -StartupType Automatic -ErrorAction SilentlyContinue | Out-Null
+
+    sc.exe failure $SvcName reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+    Start-Sleep 1
+    Start-Service $SvcName -ErrorAction SilentlyContinue
+
+    $svcCheck = Get-Service $SvcName -ErrorAction SilentlyContinue
+    if ($svcCheck -and $svcCheck.Status -eq 'Running') {
+        Write-Step 'albusx running' 'ok'
+    } else {
+        Write-Step 'albusx service started but status unknown' 'warn'
+    }
+} else {
+    Write-Step 'albusx not deployed (compilation unavailable)' 'warn'
+}
+
+Write-Step 'enforcing global kernel timer resolution requests'
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalTimerResolutionRequests' 1
+Write-Done 'albusx service'
+
+# phase 10 - cleanup
+Write-Phase 'cleanup'
+
+Write-Step 'releasing file locks'
+$services = 'wuauserv', 'bits', 'appidsvc', 'dps', 'cryptsvc', 'DoSvc'
+Stop-Service -Name $services -Force -EA 0
+
+Write-Step 'disabling reserved storage'
+try { $null = Set-WindowsReservedStorageState -State Disabled -WarningAction 0 -EA Stop } catch {
+    Write-Step 'reserved storage in use — skipped' 'warn'
+}
+
+Write-Step 'deep cleaning cache & temp directories'
+$pathsToClean = @(
+    "$env:SystemRoot\CbsTemp\*",
+    "$env:SystemRoot\Logs\*",
+    "$env:SystemRoot\SoftwareDistribution\*",
+    "$env:SystemRoot\System32\LogFiles\*",
+    "$env:SystemRoot\System32\LogFiles\WMI\*",
+    "$env:SystemRoot\System32\SleepStudy\*",
+    "$env:SystemRoot\System32\sru\*",
+    "$env:SystemRoot\System32\WDI\LogFiles\*",
+    "$env:SystemRoot\System32\winevt\Logs\*",
+    "$env:SystemRoot\SystemTemp\*",
+    "$env:SystemRoot\Temp\*",
+    "$env:SystemDrive\inetpub",
+    "$env:SystemDrive\PerfLogs",
+    "$env:SystemDrive\XboxGames",
+    "$env:SystemDrive\Windows.old",
+    "$env:SystemDrive\DumpStack.log"
+)
+Remove-Item -Path $pathsToClean -Recurse -Force -EA 0
+
+Get-ChildItem -Path "C:\Albus" -EA 0 |
+    Where-Object Name -NotMatch '(?i)^minsudo|^albus\.log$' |
+    Remove-Item -Recurse -Force -EA 0
+
+Write-Step 'clearing all event logs autonomously'
+wevtutil el | ForEach-Object { cmd /c "wevtutil cl `"$_`" 2>nul" }
+
+Write-Step 'configuring disk cleanup parameters'
+$volumeCache = @(
+    'Active Setup Temp Folders',
+    'BranchCache',
+    'Delivery Optimization Files',
+    'Device Driver Packages',
+    'Downloaded Program Files',
+    'Internet Cache Files',
+    'Language Pack',
+    'Offline Pages Files',
+    'Old ChkDsk Files',
+    'Setup Log Files',
+    'System Error Memory Dump Files',
+    'System Error Minidump Files',
+    'Temporary Setup Files',
+    'Temporary Sync Files',
+    'Update Cleanup',
+    'Upgrade Discarded Files',
+    'User File Versions',
+    'Windows Defender',
+    'Windows Error Reporting Files',
+    'Windows Reset Log Files',
+    'Windows Upgrade Log Files'
+)
+
+$regPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
+$volumeCache | ForEach-Object { Set-Reg "$regPath\$_" 'StateFlags1337' 2 }
+
+Write-Step 'executing automated disk cleanup'
+$null = Start-Process cleanmgr.exe -ArgumentList '/sagerun:1337' -Wait -NoNewWindow
+Start-ScheduledTask -TaskPath '\Microsoft\Windows\DiskCleanup\' -TaskName 'SilentCleanup' -EA 0
+
+Write-Step 'flushing dns & resetting network cache'
+$null = ipconfig /flushdns 2>&1
+$null = arp -d * 2>&1
+
+Write-Step 'rebuilding performance counters'
+'system32', 'sysWOW64' | ForEach-Object { Set-Location "$env:SystemRoot\$_"; $null = lodctr /R 2>&1 }
+
+Write-Done 'cleanup'
+
+# ════════════════════════════════════════════════════════════
+#  DONE
+# ════════════════════════════════════════════════════════════
+
+$totalTime = [math]::Round(((Get-Date) - $TODAY).TotalMinutes, 1)
+
+Write-Host ''
+Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor DarkGray
+Write-Host "     albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m" -ForegroundColor White
+Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor DarkGray
+Write-Host ''
+Write-Log "COMPLETE in ${totalTime}m"
+Start-Sleep -Seconds 5
+# shutdown -r -t 00
+pause
