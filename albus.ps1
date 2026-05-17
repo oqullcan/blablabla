@@ -302,11 +302,11 @@ function Set-AppPackageSettings {
 
 function Test-Network { return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue) }
 
-# ── phase 1 · debloat ────────────────────────────────────
+# ── phase 1 · debloat | aggressively uninstalls uwp bloatware, optional features, onedrive, and executes a total structural purge of microsoft edge.
 
 Write-Phase 'debloat'
 
-Write-Step 'removing uwp bloat'
+Write-Step 'uwp bloat'
 $keepList = @(
     '*CBS*'
     '*Microsoft.AV1VideoExtension*'
@@ -347,7 +347,7 @@ Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
     }
 
 # windows capabilities
-Write-Step 'removing windows capabilities'
+Write-Step 'windows capabilities'
 try {
     Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
         $_.State -eq 'Installed'             -and
@@ -370,7 +370,7 @@ try {
 } catch { Write-Step 'capability removal skipped' 'warn' }
 
 # optional features
-Write-Step 'disabling optional features'
+Write-Step 'windows optional features'
 try {
     Get-WindowsOptionalFeature -Online -ErrorAction Stop | Where-Object {
         $_.State       -eq 'Enabled'                    -and
@@ -395,7 +395,7 @@ try {
 } catch { Write-Step 'optional feature removal skipped' 'warn' }
 
 # ── edge ──────────────────────────────────────────────────
-Write-Step 'removing microsoft edge'
+Write-Step 'microsoft edge'
 
 function Remove-MicrosoftEdge {
     $updRoot = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate'
@@ -598,7 +598,7 @@ function Remove-MicrosoftEdge {
 Remove-MicrosoftEdge
 
 # ── onedrive ──────────────────────────────────────────────
-Write-Step 'removing onedrive'
+Write-Step 'onedrive'
 
 function Remove-OneDrive {
     if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
@@ -685,7 +685,7 @@ function Remove-OneDrive {
 Remove-OneDrive
 
 # ── misc ──────────────────────────────────────────────────
-Write-Step 'removing update health tools & gameinput'
+Write-Step 'update health tools & gameinput'
 $targets = 'Update for x64-based Windows Systems', 'Microsoft Update Health Tools', 'Microsoft GameInput'
 $pattern = ($targets | ForEach-Object { [regex]::Escape($_) }) -join '|'
 
@@ -705,8 +705,8 @@ foreach ($key in $productKeys) {
     Set-Reg -Path "-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\$prodID"
 
     foreach ($path in @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes',
         'HKCR:\Installer\UpgradeCodes',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components'
     )) {
         Get-ChildItem $path -ErrorAction SilentlyContinue |
@@ -722,3 +722,465 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -Error
 Unregister-ScheduledTask -TaskName PLUGScheduler -Confirm:$false -ErrorAction SilentlyContinue
 
 Write-Done 'debloat'
+
+# ── phase 2 · software | silently deploys essential tools: brave, 7-zip, localsend, vc++ runtimes, and directx.
+
+Write-Phase 'software installation'
+if (Test-Network) {
+    # 2.1  brave browser
+    try {
+        Write-Step 'brave browser'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/brave/brave-browser/releases/latest')
+        Get-File "https://github.com/brave/brave-browser/releases/latest/download/BraveBrowserStandaloneSetup.exe" "$ALBUS_DIR\BraveSetup.exe"
+        Start-Process -Wait "$ALBUS_DIR\BraveSetup.exe" -ArgumentList '/silent /install' -WindowStyle Hidden
+        $bravePolicy = 'HKLM:\SOFTWARE\Policies\BraveSoftware\Brave'
+        Remove-Item -Path $bravePolicy -Recurse -Force -ErrorAction SilentlyContinue
+        Set-Regs @(
+            # telemetry & privacy
+            @{ Path = $bravePolicy; Name = 'MetricsReportingEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'SafeBrowsingExtendedReportingEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'UrlKeyedAnonymizedDataCollectionEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BraveP3AEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BraveStatsPingEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'SafeBrowsingProtectionLevel'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'AutofillAddressEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'AutofillCreditCardEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'PasswordManagerEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BrowserSignin'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'EnableDoNotTrack'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveGlobalPrivacyControlEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveDeAmpEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveDebouncingEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveTrackingQueryParametersFilteringEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveReduceLanguageEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'WebRtcIPHandling'; Value = 'disable_non_proxied_udp'; Type = 'String' }
+            @{ Path = $bravePolicy; Name = 'QuicAllowed'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BlockThirdPartyCookies'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'ForceGoogleSafeSearch'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'HttpsOnlyMode'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'DnsOverHttpsMode'; Value = 'secure'; Type = 'String' }
+            @{ Path = $bravePolicy; Name = 'DnsOverHttpsTemplates'; Value = 'https://dns.quad9.net/dns-query'; Type = 'String' }
+            # feature neutralization
+            @{ Path = $bravePolicy; Name = 'BraveRewardsDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveWalletDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveVPNDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveAIChatEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BraveNewsDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BraveTalkDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BravePlaylistEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BraveWebDiscoveryEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BraveSpeedreaderEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'TorDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'SyncDisabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'IPFSEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'BackgroundModeEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'ShoppingListEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'AlwaysOpenPdfExternally'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'TranslateEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'SpellcheckEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'SearchSuggestEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'PrintingEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'DefaultBrowserSettingEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'DeveloperToolsAvailability'; Value = 2 }
+            @{ Path = $bravePolicy; Name = 'BraveWaybackMachineEnabled'; Value = 0 }
+            @{ Path = $bravePolicy; Name = 'HardwareAccelerationModeEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'HighEfficiencyModeEnabled'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'BlockExternalExtensions'; Value = 1 }
+            @{ Path = $bravePolicy; Name = 'SavingBrowserHistoryDisabled'; Value = 0 }
+            @{ Path = "$bravePolicy\ExtensionInstallForcelist"; Name = '1'; Value = 'nngceckbapebfimnlniiiahkandclblb;https://clients2.google.com/service/update2/crx'; Type = 'String' } # bitwarden
+        )
+        Write-Step "brave $($rel.tag_name) installed" 'ok'
+    } catch { Write-Step 'brave installation failed' 'fail' }
+
+    # 2.2  7-zip
+    try {
+        Write-Step '7-zip'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/ip7z/7zip/releases/latest')
+        $url = ($rel.assets | Where-Object { $_.name -match '7z.*-x64\.exe' }).browser_download_url
+        Get-File $url "$ALBUS_DIR\7zip.exe"
+        Start-Process -Wait "$ALBUS_DIR\7zip.exe" -ArgumentList '/S'
+        Set-Reg 'HKCU:\Software\7-Zip\Options' 'ContextMenu'  259
+        Set-Reg 'HKCU:\Software\7-Zip\Options' 'CascadedMenu' 0
+        Write-Step "7-zip $($rel.name) installed" 'ok'
+    } catch { Write-Step '7-zip installation failed' 'fail' }
+
+    # 2.3  localsend
+    try {
+        Write-Step 'localsend'
+        $rel = (Invoke-RestMethod 'https://api.github.com/repos/localsend/localsend/releases/latest')
+        $url = ($rel.assets | Where-Object { $_.name -match 'LocalSend-.*-windows-x86-64\.exe' }).browser_download_url
+        Get-File $url "$ALBUS_DIR\localsend.exe"
+        Start-Process -Wait "$ALBUS_DIR\localsend.exe" -ArgumentList '/VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART'
+        Write-Step "localsend $($rel.name) installed" 'ok'
+    } catch { Write-Step 'localsend installation failed' 'fail' }
+
+    # 2.4  visual c++ redistributable
+    try {
+        Write-Step 'visual c++ x64 runtime'
+        Get-File 'https://aka.ms/vs/17/release/vc_redist.x64.exe' "$ALBUS_DIR\vc_redist.x64.exe"
+        Start-Process -Wait "$ALBUS_DIR\vc_redist.x64.exe" -ArgumentList '/quiet /norestart' -WindowStyle Hidden
+        Write-Step 'vc++ runtime installed' 'ok'
+    } catch { Write-Step 'vc++ runtime failed' 'fail' }
+
+    # 2.5  directx runtime
+    try {
+        Write-Step 'directx runtime'
+        Get-File 'https://download.microsoft.com/download/1/7/1/1718CCC4-6315-4D8E-9543-8E28A4E18C4C/dxwebsetup.exe' "$ALBUS_DIR\dxwebsetup.exe"
+        Start-Process -Wait "$ALBUS_DIR\dxwebsetup.exe" -ArgumentList '/Q' -WindowStyle Hidden
+        Write-Step 'directx runtime installed' 'ok'
+    } catch { Write-Step 'directx runtime failed' 'fail' }
+} else {
+    Write-Step 'no network — skipping software installation' 'warn'
+}
+Write-Done 'software installation'
+
+# ── phase 3 · gpu | automated driver fetching, extraction, and debloating (nvidia, amd, intel). applies profile inspector presets and driver-level registry optimizations.
+
+function NVIDIA {
+    Write-Phase 'nvidia driver setup'
+
+    Write-Step 'finding latest nvidia driver'
+    $uri = 'https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=120&pfid=929&osID=57&languageCode=1033&isWHQL=1&dch=1&sort1=0&numberOfResults=1'
+    $response = Invoke-RestMethod -Uri $uri -Method GET -UseBasicParsing
+    $version = $response.IDS[0].downloadInfo.Version
+    $windowsVersion = if ([Environment]::OSVersion.Version -ge (new-object 'Version' 9, 1)) {"win10-win11"} else {"win8-win7"}
+    $windowsArchitecture = if ([Environment]::Is64BitOperatingSystem) {"64bit"} else {"32bit"}
+    $url = "https://international.download.nvidia.com/Windows/$version/$version-desktop-$windowsVersion-$windowsArchitecture-international-dch-whql.exe"
+    $OriginalFileName = ($url -split '/')[-1]
+
+    $DriverExe = "$ALBUS_DIR\$OriginalFileName"
+    Write-Step "downloading $OriginalFileName"
+    Get-File $url $DriverExe
+
+    $ZipExe = "$env:ProgramFiles\7-Zip\7z.exe"
+    if (-not (Test-Path $ZipExe)) { Write-Step '7-zip not found' 'fail'; return }
+
+    $ExtractPath = "$ALBUS_DIR\NVIDIA"
+    if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
+
+    Write-Step 'extracting & debloating'
+    & $ZipExe x $DriverExe -o"$ExtractPath" -y | Out-Null
+
+    $Whitelist = '^(Display\.Driver|NVI2|EULA\.txt|ListDevices\.txt|setup\.cfg|setup\.exe)$'
+    Get-ChildItem $ExtractPath | Where-Object { $_.Name -notmatch $Whitelist } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+    $cfg = "$ExtractPath\setup.cfg"
+    if (Test-Path $cfg) { (Get-Content $cfg) | Where-Object { $_ -notmatch 'EulaHtmlFile|FunctionalConsentFile|PrivacyPolicyFile' } | Set-Content $cfg -Force }
+
+    Write-Step 'installing silently'
+    Start-Process "$ExtractPath\setup.exe" -ArgumentList '-s -noreboot -noeula -clean' -Wait -NoNewWindow
+
+    Remove-Item $DriverExe -Force -ErrorAction SilentlyContinue
+    Remove-Item $ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:SystemDrive\NVIDIA" -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Step 'nvidia optimizations'
+    Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
+        Set-Reg $_.PSPath 'DisableDynamicPstate' 1
+        Set-Reg $_.PSPath 'RMHdcpKeyglobZero'    1
+        Set-Reg $_.PSPath 'RmProfilingAdminOnly' 0
+    }
+
+    $nvTweak = 'HKLM:\System\ControlSet001\Services\nvlddmkm\Parameters\Global\NVTweak'
+    Set-Reg $nvTweak 'NvCplPhysxAuto' 0
+    Set-Reg $nvTweak 'NvDevToolsVisible' 1
+    Set-Reg $nvTweak 'RmProfilingAdminOnly' 0
+
+    Set-Reg 'HKCU:\Software\NVIDIA Corporation\NvTray' 'StartOnLogin' 0
+    Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\FTS' 'EnableGR535' 0
+    Set-Reg 'HKLM:\SYSTEM\ControlSet001\Services\nvlddmkm\Parameters\FTS' 'EnableGR535' 0
+    Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\FTS' 'EnableGR535' 0
+
+    $DRSPath = 'C:\ProgramData\NVIDIA Corporation\Drs'
+    if (Test-Path $DRSPath) { Get-ChildItem -Path $DRSPath -Recurse | Unblock-File -ErrorAction SilentlyContinue }
+
+    Write-Step 'fetching & applying profile inspector'
+    $InspectorZip = "$ALBUS_DIR\nvidiaProfileInspector.zip"
+    $ExtractDir   = "$ALBUS_DIR\Temp\nvidiaProfileInspector"
+
+    try {
+        $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/Orbmu2k/nvidiaProfileInspector/releases/latest" -ErrorAction Stop
+        $Asset = ($Release.assets | Where-Object { $_.name -match '\.zip$' })[0]
+        if ($Asset) {
+            Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $InspectorZip -UseBasicParsing -ErrorAction Stop
+            & $ZipExe x "$InspectorZip" -o"$ExtractDir" -y | Out-Null
+        }
+    } catch { }
+
+    $NIPFile = @"
+<?xml version="1.0" encoding="utf-16"?>
+<ArrayOfProfile>
+  <Profile>
+    <ProfileName>Base Profile</ProfileName>
+    <Settings>
+      <ProfileSetting><SettingNameInfo>Frame Rate Limiter V3</SettingNameInfo><SettingID>277041154</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>GSYNC - Application Mode</SettingNameInfo><SettingID>294973784</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>GSYNC - Application State</SettingNameInfo><SettingID>279476687</SettingID><SettingValue>4</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>GSYNC - Global Feature</SettingNameInfo><SettingID>278196567</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>GSYNC - Global Mode</SettingNameInfo><SettingID>278196727</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>GSYNC - Indicator Overlay</SettingNameInfo><SettingID>268604728</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Maximum Pre-Rendered Frames</SettingNameInfo><SettingID>8102046</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Preferred Refresh Rate</SettingNameInfo><SettingID>6600001</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Ultra Low Latency - CPL State</SettingNameInfo><SettingID>390467</SettingID><SettingValue>2</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Ultra Low Latency - Enabled</SettingNameInfo><SettingID>277041152</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Vertical Sync</SettingNameInfo><SettingID>11041231</SettingID><SettingValue>138504007</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Vertical Sync - Smooth AFR Behavior</SettingNameInfo><SettingID>270198627</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Vertical Sync - Tear Control</SettingNameInfo><SettingID>5912412</SettingID><SettingValue>2525368439</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Vulkan/OpenGL Present Method</SettingNameInfo><SettingID>550932728</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Antialiasing - Gamma Correction</SettingNameInfo><SettingID>276652957</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Antialiasing - Mode</SettingNameInfo><SettingID>276757595</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Antialiasing - Setting</SettingNameInfo><SettingID>282555346</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Anisotropic Filter - Optimization</SettingNameInfo><SettingID>8703344</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Anisotropic Filter - Sample Optimization</SettingNameInfo><SettingID>15151633</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Anisotropic Filtering - Mode</SettingNameInfo><SettingID>282245910</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Anisotropic Filtering - Setting</SettingNameInfo><SettingID>270426537</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Texture Filtering - Negative LOD Bias</SettingNameInfo><SettingID>1686376</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Texture Filtering - Quality</SettingNameInfo><SettingID>13510289</SettingID><SettingValue>20</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Texture Filtering - Trilinear Optimization</SettingNameInfo><SettingID>3066610</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>CUDA - Force P2 State</SettingNameInfo><SettingID>1343646814</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>CUDA - Sysmem Fallback Policy</SettingNameInfo><SettingID>283962569</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Power Management - Mode</SettingNameInfo><SettingID>274197361</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Shader Cache - Cache Size</SettingNameInfo><SettingID>11306135</SettingID><SettingValue>4294967295</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Threaded Optimization</SettingNameInfo><SettingID>549528094</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>OpenGL GDI Compatibility</SettingNameInfo><SettingID>544392611</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Preferred OpenGL GPU</SettingNameInfo><SettingID>550564838</SettingID><SettingValue>id,2.0:268410DE,00000100,GF - (400,2,161,24564) @ (0)</SettingValue><ValueType>String</ValueType></ProfileSetting>
+    </Settings>
+  </Profile>
+</ArrayOfProfile>
+"@
+    $NIPPath = "$ALBUS_DIR\inspector.nip"
+    $NIPFile | Set-Content $NIPPath -Force
+
+    if (Test-Path $ExtractDir) {
+        $InspectorExe = Get-ChildItem -Path $ExtractDir -Filter "*nvidiaProfileInspector.exe" -Recurse | Select-Object -First 1
+        if ($InspectorExe) {
+            Start-Process $InspectorExe.FullName -ArgumentList "-silentImport $NIPPath" -Wait -NoNewWindow
+        }
+    }
+    Write-Done 'nvidia driver setup'
+}
+
+function AMD {
+    Write-Phase 'amd driver setup'
+
+    Write-Step 'downloading amd web installer'
+    $DownloadAmd = Invoke-WebRequest "https://www.amd.com/en/support/download/drivers.html" -UseBasicParsing |
+        Select-Object -ExpandProperty Links |
+        Where-Object { $_.href -match "drivers\.amd\.com/drivers/installer/.*/whql/amd-software-adrenalin-edition-.*-minimalsetup-.*_web\.exe" } | Select-Object href -First 1
+
+    $spoofwebbrowser = @{
+        "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "Accept"     = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "Referer"    = "https://www.amd.com/"
+    }
+    $OriginalFileName = ($DownloadAmd.href.Split('?')[0] -split '/')[-1]
+    $DriverExe = "$ALBUS_DIR\$OriginalFileName"
+    Write-Step "downloading $OriginalFileName"
+    Invoke-WebRequest $DownloadAmd.href -UseBasicParsing -Headers $spoofwebbrowser -OutFile $DriverExe -ErrorAction SilentlyContinue | Out-Null
+
+    $ZipExe = "$env:ProgramFiles\7-Zip\7z.exe"
+    if (-not (Test-Path $ZipExe)) { Write-Step '7-zip not found' 'fail'; return }
+
+    $ExtractPath = "$ALBUS_DIR\AMD"
+    if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
+
+    Write-Step 'extracting & debloating'
+    & $ZipExe x $DriverExe -o"$ExtractPath" -y | Out-Null
+
+    $xmlFiles = @(
+        "$ExtractPath\Config\AMDAUEPInstaller.xml",
+        "$ExtractPath\Config\AMDCOMPUTE.xml",
+        "$ExtractPath\Config\AMDLinkDriverUpdate.xml",
+        "$ExtractPath\Config\AMDRELAUNCHER.xml",
+        "$ExtractPath\Config\AMDScoSupportTypeUpdate.xml",
+        "$ExtractPath\Config\AMDUpdater.xml",
+        "$ExtractPath\Config\AMDUWPLauncher.xml",
+        "$ExtractPath\Config\EnableWindowsDriverSearch.xml",
+        "$ExtractPath\Config\InstallUEP.xml",
+        "$ExtractPath\Config\ModifyLinkUpdate.xml"
+    )
+    foreach ($file in $xmlFiles) {
+        if (Test-Path $file) {
+            $content = Get-Content $file -Raw
+            $content = $content -replace '<Enabled>true</Enabled>', '<Enabled>false</Enabled>'
+            $content = $content -replace '<Hidden>true</Hidden>', '<Hidden>false</Hidden>'
+            Set-Content $file -Value $content -NoNewline
+        }
+    }
+
+    $jsonFiles = @(
+        "$ExtractPath\Config\InstallManifest.json",
+        "$ExtractPath\Bin64\cccmanifest_64.json"
+    )
+    foreach ($file in $jsonFiles) {
+        if (Test-Path $file) {
+            $content = Get-Content $file -Raw
+            $content = $content -replace '"InstallByDefault"\s*:\s*"Yes"', '"InstallByDefault" : "No"'
+            Set-Content $file -Value $content -NoNewline
+        }
+    }
+
+    Write-Step 'installing silently'
+    Start-Process "$ExtractPath\Bin64\ATISetup.exe" -ArgumentList "-INSTALL -VIEW:2" -Wait -WindowStyle Hidden
+
+    Write-Step 'cleaning up bloatware & services'
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AMDNoiseSuppression" -ErrorAction SilentlyContinue | Out-Null
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Name "StartRSX" -ErrorAction SilentlyContinue | Out-Null
+    Unregister-ScheduledTask -TaskName "StartCN" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+
+    @('AMD Crash Defender Service', 'amdfendr', 'amdfendrmgr', 'amdacpbus', 'AMDSAFD', 'AtiHDAudioService') | ForEach-Object {
+        sc.exe stop $_ | Out-Null
+        sc.exe delete $_ | Out-Null
+    }
+
+    Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\AMD Bug Report Tool" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:SystemDrive\Windows\SysWOW64\AMDBugReportTool.exe" -Force -ErrorAction SilentlyContinue
+
+    $amdinstallmanager = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*AMD Install Manager*" }
+    if ($amdinstallmanager) {
+        $guid = $amdinstallmanager.PSChildName
+        Start-Process "msiexec.exe" -ArgumentList "/x $guid /qn /norestart" -Wait -NoNewWindow
+    }
+
+    $folderName = "AMD Software$([char]0xA789) Adrenalin Edition"
+    Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\$folderName\$folderName.lnk" -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\$folderName" -Recurse -Force -ErrorAction SilentlyContinue
+
+    Remove-Item $DriverExe -Force -ErrorAction SilentlyContinue
+    Remove-Item $ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:SystemDrive\AMD" -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Step 'amd optimizations'
+    Start-Process "$env:SystemDrive\Program Files\AMD\CNext\CNext\RadeonSoftware.exe"
+    Start-Sleep -Seconds 15
+    Stop-Process -Name "RadeonSoftware" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+
+    Set-Reg 'HKCU:\Software\AMD\CN' 'AutoUpdate' 0
+    Set-Reg 'HKCU:\Software\AMD\CN' 'WizardProfile' 'PROFILE_CUSTOM' 'String'
+
+    $basePath = "HKLM:\System\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    Get-ChildItem -Path $basePath -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "UMD" } | ForEach-Object {
+        Set-Reg $_.Name 'VSyncControl' ([byte[]](0x30,0x30,0x30,0x30)) 'Binary'
+        Set-Reg $_.Name 'TFQ' ([byte[]](0x33,0x32,0x30,0x30)) 'Binary'
+        Set-Reg $_.Name 'Tessellation' ([byte[]](0x33,0x31,0x30,0x30)) 'Binary'
+        Set-Reg $_.Name 'Tessellation_OPTION' ([byte[]](0x33,0x32,0x30,0x30)) 'Binary'
+    }
+
+    Set-Reg 'HKCU:\Software\AMD\CN\CustomResolutions' 'EulaAccepted' 'true' 'String'
+    Set-Reg 'HKCU:\Software\AMD\CN\DisplayOverride' 'EulaAccepted' 'true' 'String'
+
+    Get-ChildItem -Path $basePath -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "power_v1" } | ForEach-Object {
+        Set-Reg $_.Name 'abmlevel' ([byte[]](0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30)) 'Binary'
+    }
+
+    Set-Reg 'HKCU:\Software\AMD\CN' 'SystemTray' 'false' 'String'
+    Set-Reg 'HKCU:\Software\AMD\CN' 'CN_Hide_Toast_Notification' 'true' 'String'
+    Set-Reg 'HKCU:\Software\AMD\CN' 'AnimationEffect' 'false' 'String'
+
+    Remove-Item "Registry::HKCU\Software\AMD\CN\Notification" -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path "Registry::HKCU\Software\AMD\CN\Notification" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-Reg 'HKCU:\Software\AMD\CN\FreeSync' 'AlreadyNotified' 1
+    Set-Reg 'HKCU:\Software\AMD\CN\OverlayNotification' 'AlreadyNotified' 1
+    Set-Reg 'HKCU:\Software\AMD\CN\VirtualSuperResolution' 'AlreadyNotified' 1
+
+    Write-Done 'amd driver setup'
+}
+
+function INTEL {
+    Write-Phase 'intel driver setup'
+
+    Write-Step '  download the driver, then press any key...' -ForegroundColor Yellow
+    Start-Process "https://www.intel.com/content/www/us/en/search.html#sortCriteria=%40lastmodifieddt%20descending&f-operatingsystem_en=Windows%2011%20Family*&f-downloadtype=Drivers&cf-tabfilter=Downloads&cf-downloadsppth=Graphics"
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+
+    Add-Type -AssemblyName System.Windows.Forms
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title, $dlg.Filter = 'select intel driver', 'Executable (*.exe)|*.exe'
+    if ($dlg.ShowDialog() -ne 'OK') { Write-Step 'cancelled' 'warn'; return }
+
+    $ZipExe = "$env:ProgramFiles\7-Zip\7z.exe"
+    if (-not (Test-Path $ZipExe)) { Write-Step '7-zip not found' 'fail'; return }
+
+    $ExtractPath = "$ALBUS_DIR\INTEL"
+    if (Test-Path $ExtractPath) { Remove-Item $ExtractPath -Recurse -Force }
+
+    Write-Step 'extracting & debloating'
+    & $ZipExe x $dlg.FileName -o"$ExtractPath" -y | Out-Null
+
+    Write-Step 'installing silently'
+    Start-Process "cmd.exe" -ArgumentList "/c `"$ExtractPath\Installer.exe`" -f --noExtras --terminateProcesses -s" -WindowStyle Hidden -Wait
+
+    $IntelGraphicsSoftware = Get-ChildItem "$ExtractPath\Resources\Extras\IntelGraphicsSoftware_*.exe" | Select-Object -First 1 -ExpandProperty Name
+    if ($IntelGraphicsSoftware) {
+        Start-Process "$ExtractPath\Resources\Extras\$IntelGraphicsSoftware" -ArgumentList "/s" -Wait -NoNewWindow
+    }
+
+    Write-Step 'cleaning up bloatware & services'
+    $FileName = "Intel$([char]0xAE) Graphics Software"
+    Remove-ItemProperty -Path "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" -Name $FileName -ErrorAction SilentlyContinue | Out-Null
+
+    @('IntelGFXFWupdateTool', 'cplspcon', 'CtaChildDriver', 'GSCAuxDriver', 'GSCx64') | ForEach-Object {
+        sc.exe stop $_ | Out-Null
+        sc.exe delete $_ | Out-Null
+    }
+
+    @('IntelGraphicsSoftware', 'PresentMonService') | ForEach-Object { Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+    Remove-Item "$env:SystemDrive\Program Files\Intel\Intel Graphics Software\PresentMonService.exe" -Force -ErrorAction SilentlyContinue
+
+    Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Intel\Intel Graphics Software\$FileName.lnk" -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Intel" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:SystemDrive\Intel" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $ExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Step 'intel optimizations'
+    $basePath = "HKLM:\System\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    Get-ChildItem -Path $basePath -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
+        New-Item -Path "$($_.PSPath)\3DKeys" -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    Get-ChildItem -Path $basePath -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "3DKeys" } | ForEach-Object {
+        Set-Reg $_.Name 'Global_AsyncFlipMode' 2
+        Set-Reg $_.Name 'Global_LowLatency' 0
+    }
+
+    Write-Done 'intel driver setup'
+}
+
+$basePath = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore"
+Get-ChildItem -Path $basePath -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+    Set-Reg $_.Name 'AutoColorManagementEnabled' 0
+}
+
+$GpuMenu = @(
+    @{ Label = 'nvidia' }
+    @{ Label = 'amd' }
+    @{ Label = 'intel' }
+    @{ Label = 'skip' }
+)
+
+$selection = Read-Choice -Title "GPU DEPLOYMENT SELECTION" -Question "select target hardware" -Options $GpuMenu
+
+switch -regex ($selection) {
+    '(?i)^nvidia$' {
+        Write-Done "GPU SELECTION"
+        NVIDIA
+    }
+    '(?i)^amd$' {
+        Write-Step 'amd core not implemented yet' 'warn'
+        Write-Done 'GPU SELECTION'
+    }
+    '(?i)^intel$' {
+        Write-Step 'intel core not implemented yet' 'warn'
+        Write-Done 'GPU SELECTION'
+    }
+    '(?i)^skip$' {
+        Write-Step 'hardware deployment skipped' 'skip'
+        Write-Done 'GPU SELECTION'
+    }
+    default {
+        Write-Step "invalid selection: $selection" 'fail'
+        Write-Done 'GPU SELECTION'
+    }
+}
