@@ -1,6 +1,5 @@
 #Requires -RunAsAdministrator
 
-#  ── ogulcan yetim - albuswin
 #  ── https://www.github.com/oqullcan/albuswin
 #  ── https://www.x.com/oqullcn
 
@@ -19,7 +18,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $ALBUS_DIR     = 'C:\Albus'
 $ALBUS_LOG     = "$ALBUS_DIR\albus.log"
-$ALBUS_VERSION = '6.2'
+$ALBUS_VERSION = '7.0'
 $TODAY         = Get-Date
 
 $script:ActiveSID = $null
@@ -300,9 +299,8 @@ function Set-AppPackageSettings {
 }
 
 # ── network helper ────────────────────────────────────
-function Test-Network {
-    return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue)
-}
+
+function Test-Network { return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue) }
 
 # ── phase 1 · debloat ────────────────────────────────────
 
@@ -412,7 +410,7 @@ function Remove-MicrosoftEdge {
     @('\MicrosoftEdgeUpdateTaskMachineCore',
       '\MicrosoftEdgeUpdateTaskMachineUA',
       '\MicrosoftEdgeUpdateTaskMachineCoreSystem',
-      '\MicrosoftEdgeUpdateBrowserReplacementTask',
+      '\MicrosoftEdgeUpdateBrowserReplacementTask'
     ) | ForEach-Object {
         try { Disable-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue | Out-Null } catch {}
         try { Unregister-ScheduledTask -TaskName $_ -Confirm:$false -ErrorAction SilentlyContinue } catch {}
@@ -594,7 +592,7 @@ function Remove-MicrosoftEdge {
         if ($type) { $type::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero) }
     } catch {}
 
-    Write-Step 'edge completely removed' 'ok'
+    # Write-Step 'edge completely removed' 'ok'
 }
 
 Remove-MicrosoftEdge
@@ -681,221 +679,10 @@ function Remove-OneDrive {
         New-Item -Path "HKCR:\Wow6432Node\CLSID\$clsid" -Force | Out-Null
         Set-ItemProperty -Path "HKCR:\Wow6432Node\CLSID\$clsid" -Name 'System.IsPinnedToNameSpaceTree' -Value 0 -Type DWord
     } catch {}
-    Write-Step 'onedrive removal complete'
+    # Write-Step 'onedrive removal complete'
 }
 
 Remove-OneDrive
-
-Write-Done 'debloat'
-
-# ════════════════════════════════════════════════════════════
-#  PHASE · APP CONFIGURATIONS
-# ════════════════════════════════════════════════════════════
-Write-Phase 'app configurations'
-
-# 1.1 Store auto-update disablement (standard registry)
-Write-Step 'disabling store app updates'
-try {
-    $storeUpdatePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsStore\WindowsUpdate"
-    if (-not (Test-Path $storeUpdatePath)) {
-        New-Item -Path $storeUpdatePath -Force | Out-Null
-    }
-    Set-ItemProperty -Path $storeUpdatePath -Name "AutoDownload" -Value 2 -Type DWord -Force
-    Write-Step 'store auto-updates disabled' -Status 'ok'
-} catch {
-    Write-Step 'failed to disable store auto-updates' -Status 'fail'
-    Write-Log "STORE UPDATE ERR: $_"
-}
-
-# Generate live Windows FILETIME timestamp bytes for registry payloads
-$now = [DateTime]::UtcNow.ToFileTime()
-$timeBytes = [BitConverter]::GetBytes([int64]$now)
-$timeHex = ($timeBytes | ForEach-Object { "{0:x2}" -f $_ }) -join ','
-
-# 1.2 Windows Store package settings
-$storeReg = @"
-[HKEY_LOCAL_MACHINE\Settings\LocalState]
-; disable video autoplay
-"VideoAutoplay"=hex(5f5e10b):00,$timeHex
-; disable notifications for app installations
-"EnableAppInstallNotifications"=hex(5f5e10b):00,$timeHex
-
-[HKEY_LOCAL_MACHINE\Settings\LocalState\PersistentSettings]
-; disable personalized experiences
-"PersonalizationEnabled"=hex(5f5e10b):00,$timeHex
-"@
-
-Set-AppPackageSettings `
-    -Name "windows store" `
-    -PackageName "Microsoft.WindowsStore_8wekyb3d8bbwe" `
-    -StopProcesses @("WinStore.App", "backgroundTaskHost", "StoreDesktopExtension") `
-    -RegistryContent $storeReg
-
-# 1.3 Windows App Actions settings
-$appActionsReg = @"
-[HKEY_LOCAL_MACHINE\Settings\LocalState\DisabledApps]
-"Microsoft.Paint_8wekyb3d8bbwe"=hex(5f5e10b):01,$timeHex
-"Microsoft.Windows.Photos_8wekyb3d8bbwe"=hex(5f5e10b):01,$timeHex
-"MicrosoftWindows.Client.CBS_cw5n1h2txyewy"=hex(5f5e10b):01,$timeHex
-"@
-
-Set-AppPackageSettings `
-    -Name "app actions" `
-    -PackageName "MicrosoftWindows.Client.CBS_cw5n1h2txyewy" `
-    -StopProcesses @("AppActions", "CrossDeviceResume", "DesktopStickerEditorWin32Exe", "DiscoveryHubApp", "FESearchHost", "SearchHost", "SoftLandingTask", "TextInputHost", "VisualAssistExe", "WebExperienceHostApp", "WindowsBackupClient", "WindowsMigration") `
-    -RegistryContent $appActionsReg
-
-# 1.4 Notepad settings
-$notepadReg = @"
-[HKEY_LOCAL_MACHINE\Settings\LocalState]
-"OpenFile"=hex(5f5e104):01,00,00,00,$timeHex
-"GhostFile"=hex(5f5e10b):00,$timeHex
-"RewriteEnabled"=hex(5f5e10b):00,$timeHex
-"@
-
-Set-AppPackageSettings `
-    -Name "notepad" `
-    -PackageName "Microsoft.WindowsNotepad_8wekyb3d8bbwe" `
-    -StopProcesses @("Notepad") `
-    -RegistryContent $notepadReg
-
-Write-Done 'app configurations'
-
-# ════════════════════════════════════════════════════════════
-#  WINSXS · TELEMETRY & AI PURGE
-# ════════════════════════════════════════════════════════════
-Write-Phase 'telemetry & ai purge'
-
-# ── binary nötralize ──────────────────────────────────────
-Write-Step 'neutralizing telemetry & ai binaries'
-$purgeBinaries = @(
-    # telemetry
-    "$env:SystemRoot\System32\CompatTelRunner.exe"
-    "$env:SystemRoot\System32\DeviceCensus.exe"
-    "$env:SystemRoot\System32\AggregatorHost.exe"
-    "$env:SystemRoot\System32\wsqmcons.exe"
-    "$env:SystemRoot\System32\WerFault.exe"
-    "$env:SystemRoot\System32\WerFaultSecure.exe"
-    "$env:SystemRoot\System32\wermgr.exe"
-    "$env:SystemRoot\System32\omadmclient.exe"
-    "$env:SystemRoot\System32\DiagSvcs\DiagnosticsHub.StandardCollector.Service.exe"
-    "$env:SystemRoot\SysWOW64\CompatTelRunner.exe"
-    "$env:SystemRoot\SysWOW64\DeviceCensus.exe"
-    # copilot & ai
-    "$env:SystemRoot\System32\Copilot.exe"
-    "$env:SystemRoot\SysWOW64\Copilot.exe"
-    "$env:SystemRoot\System32\WindowsCopilotRuntimeActions.exe"
-    # smartscreen
-    "$env:SystemRoot\System32\smartscreen.exe"
-)
-foreach ($bin in $purgeBinaries) {
-    if (-not (Test-Path $bin)) { continue }
-    try {
-        Rename-Item $bin "$bin.bak" -Force -ErrorAction Stop
-        # Write-Step "neutralized: $(Split-Path $bin -Leaf)" 'ok'
-    } catch {
-        # Write-Step "skipped (locked): $(Split-Path $bin -Leaf)" 'warn'
-    }
-}
-
-# ── dism package purge ────────────────────────────────────
-Write-Step 'querying installed dism packages'
-
-$allPackages = Get-WindowsPackage -Online -ErrorAction SilentlyContinue
-Write-Step "total packages found: $($allPackages.Count)" 'ok'
-
-$dismTargets = @(
-    'DiagTrack', 'Telemetry', 'CEIP', 'CEIPEnable', 'SQM',
-    'UsbCeip', 'TelemetryClient', 'Unified-Telemetry', 'Update-Aggregators',
-    'DataCollection', 'SetupPlatform-Telemetry', 'SettingsHandlers-SIUF',
-    'SettingsHandlers-Flights', 'Application-Experience', 'Compat-Appraiser',
-    'Compat-CompatTelRunner', 'Compat-GeneralTel', 'OneCoreUAP-Feedback',
-    'Diagnostics-Telemetry', 'Diagnostics-TraceReporting', 'BuildFlighting',
-    'Flighting', 'Feedback', 'FeedbackNotifications', 'StringFeedbackEngine',
-    'ErrorReporting', 'Microsoft-Copilot', 'SettingsHandlers-Copilot',
-    'UserExperience-AIX', 'UserExperience-CoreAI', 'AI-MachineLearning',
-    'BingSearch', 'Windows-UNP', 'Cortana', 'AdvertisingId', 'RetailDemo',
-    'OneDrive', 'QuickAssist', 'PeopleExperienceHost', 'OOBE-FirstLogonAnim',
-    'Skype-ORTC', 'FlipGridPWA', 'OutlookPWA', 'PortableWorkspaces',
-    'StepsRecorder', 'Holographic', 'Adobe-Flash', 'Bubbles', 'Mystify',
-    'PhotoScreensaver', 'scrnsave', 'ssText3d', 'Shell-SoundThemes',
-    'KeyboardDiagnostic', 'SecureAssessment', 'InputCloudStore',
-    'Windows-Ribbons', 'PhotoBasic', 'shimgvw'
-)
-
-$targetRegex = '(?i)' + ($dismTargets -join '|')
-$matchedPackages = $allPackages | Where-Object { $_.PackageName -match $targetRegex }
-$removedCount = 0
-
-if ($matchedPackages) {
-    foreach ($pkg in $matchedPackages) {
-        $shortName = $pkg.PackageName.Split('~')[0].ToLower()
-        Write-Step "removing: $shortName" 'run'
-
-        try {
-            Remove-WindowsPackage -Online -PackageName $pkg.PackageName -NoRestart -ErrorAction Stop | Out-Null
-            Write-Step "removed: $shortName" 'ok'
-            $removedCount++
-        } catch {
-            Write-Step "skip: $shortName" 'warn'
-        }
-    }
-}
-
-if ($removedCount -eq 0) {
-    Write-Step 'no targets found — system already clean' 'skip'
-} else {
-    Write-Step "dism purge complete — removed: $removedCount" 'ok'
-}
-
-# ── winsxs manifest deaktive ──────────────────────────────
-Write-Step 'disabling telemetry & ai winsxs manifests'
-$manifestPatterns = @(
-    '*diagtrack*'
-    '*telemetry*'
-    '*ceip*'
-    '*diaghub*'
-    '*wer*'
-    '*compattelrunner*'
-    '*devicecensus*'
-    '*sqmclient*'
-    '*aggregatorhost*'
-    '*copilot*'
-    '*cortana*'
-    '*bingsearch*'
-    '*retaildemo*'
-    '*feedback*'
-    '*flighting*'
-    '*errorrepor*'
-)
-$manifestDir = "$env:SystemRoot\WinSxS\Manifests"
-foreach ($pattern in $manifestPatterns) {
-    Get-ChildItem $manifestDir -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            Rename-Item $_.FullName "$($_.FullName).bak" -Force -ErrorAction Stop
-            Write-Step "manifest: $($_.Name)" 'ok'
-        } catch {
-            Write-Step "manifest locked: $($_.Name)" 'warn'
-        }
-    }
-}
-
-# ── dism component store cleanup ──────────────────────────
-Write-Step 'dism component store cleanup'
-$dismCleanup = @(
-    '/Online /Cleanup-Image /StartComponentCleanup /ResetBase'
-    '/Online /Cleanup-Image /SPSuperseded'
-)
-foreach ($arg in $dismCleanup) {
-    $label = ($arg -split '/')[-1].Trim()
-    Write-Step "dism: $label" 'run'
-    $r = Start-Process dism -ArgumentList $arg -Wait -NoNewWindow -PassThru
-    if ($r.ExitCode -eq 0) { Write-Step "dism: $label" 'ok' }
-    else                   { Write-Step "dism: $label exit $($r.ExitCode)" 'warn' }
-}
-
-Write-Step 'telemetry & ai purge complete' 'ok'
-Write-Done 'telemetry & ai purge'
 
 # ── misc ──────────────────────────────────────────────────
 Write-Step 'removing update health tools & gameinput'
@@ -917,7 +704,11 @@ foreach ($key in $productKeys) {
     Set-Reg -Path "-HKCR:\Installer\Features\$prodID"
     Set-Reg -Path "-HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\$prodID"
 
-    foreach ($path in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes', 'HKCR:\Installer\UpgradeCodes', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components')) {
+    foreach ($path in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UpgradeCodes',
+        'HKCR:\Installer\UpgradeCodes',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Components'
+    )) {
         Get-ChildItem $path -ErrorAction SilentlyContinue |
             Where-Object { $_.GetValueNames() -contains $prodID } |
             ForEach-Object { Set-Reg -Path "-$($_.Name)" }
@@ -929,3 +720,5 @@ Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -Error
     ForEach-Object { Set-Reg -Path "-$($_.Name)" }
 
 Unregister-ScheduledTask -TaskName PLUGScheduler -Confirm:$false -ErrorAction SilentlyContinue
+
+Write-Done 'debloat'
