@@ -1641,22 +1641,24 @@ Set-Reg $KernelPath 'MitigationAuditOptions' $mitigPayload 'Binary'
 
 $MemMgmt = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
-# meltdown & spectre (cve-2017-5754, cve-2017-5715)
+# meltdown & spectre
 Write-Step 'disabling meltdown & spectre mitigations'
 Set-Reg -Path $MemMgmt -Name 'FeatureSettings'             -Value 1
 Set-Reg -Path $MemMgmt -Name 'FeatureSettingsOverride'     -Value 3
 Set-Reg -Path $MemMgmt -Name 'FeatureSettingsOverrideMask' -Value 3
 
-# intel tsx (transaction synchronization extensions)
-# downfall
+# intel transaction synchronization extensions & downfall
 if ((Get-CimInstance Win32_Processor -EA 0).Manufacturer -match 'Intel') {
     Set-Reg $KernelPath 'DisableTSX' 0
     Set-Reg $KernelPath 'DisableGatherDataSampling' 1
 } else {
     Remove-ItemProperty -Path $KernelPath -Name 'DisableTSX' -EA 0
+    Remove-ItemProperty -Path $KernelPath -Name 'DisableGatherDataSampling' -EA 0
 }
 
 Write-Done 'hardware tuning'
+
+# ━━━ phase 11 |  disables 8.3 naming, last access timestamps, platform clock, and memory compression. ━━━━━━━━━
 
 Write-Phase 'filesystem & boot'
 
@@ -1676,7 +1678,7 @@ bcdedit /set quietboot yes | Out-Null
 bcdedit /set {globalsettings} custom:16000067 true | Out-Null
 bcdedit /set {globalsettings} custom:16000069 true | Out-Null
 bcdedit /set {globalsettings} custom:16000068 true | Out-Null
-bcdedit /set '{current}' description 'Albus 6.2' | Out-Null
+bcdedit /set '{current}' description 'Albus' | Out-Null
 label C: Albus | Out-Null
 
 Write-Step 'disable memory compression'
@@ -2031,5 +2033,4 @@ Write-Host "  ━━━  albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m 
 Write-Host ''
 
 Start-Sleep -Seconds 5
-# shutdown -r -t 00
-pause
+Pause
