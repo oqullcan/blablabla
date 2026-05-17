@@ -228,76 +228,6 @@ function Set-Regs {
     }
 }
 
-# ── app package settings engine ───────────────────────
-function Set-AppPackageSettings {
-    param(
-        [string]$Name,
-        [string]$PackageName,
-        [string[]]$StopProcesses,
-        [string]$RegistryContent
-    )
-    $oldEAP = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-
-    Write-Step "configuring $Name"
-
-    # kill running target processes
-    if ($StopProcesses) {
-        $StopProcesses | ForEach-Object { Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue }
-        Start-Sleep -Seconds 2
-    }
-    # check settings.dat path
-    $settingsDat = "$env:LocalAppData\Packages\$PackageName\Settings\settings.dat"
-    if (-not (Test-Path $settingsDat)) {
-        Write-Step "skipping $Name (settings.dat not found)" -Status 'skip'
-        $ErrorActionPreference = $oldEAP
-        return
-    }
-
-    $tempRegPath = "$env:SystemRoot\Temp\$($Name.Replace(' ', '')).reg"
-    $hiveLoaded = $false
-    $importStatus = -1
-
-    try {
-        # create registry file
-        $regHeader = "Windows Registry Editor Version 5.00`r`n`r`n"
-        Set-Content -Path $tempRegPath -Value ($regHeader + $RegistryContent) -Force
-        # load hive
-        reg load "HKLM\Settings" $settingsDat >$null 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $hiveLoaded = $true
-        } else {
-            Write-Step "failed to load hive for $Name" -Status 'fail'
-            return
-        }
-        # import registry file
-        reg import $tempRegPath >$null 2>&1
-        $importStatus = $LASTEXITCODE
-
-        if ($importStatus -eq 0) {
-            Write-Step "$Name settings applied" -Status 'ok'
-        } else {
-            Write-Step "failed to import settings for $Name" -Status 'fail'
-        }
-    } catch {
-        Write-Step "error configuring $Name" -Status 'fail'
-        Write-Log "APP SETTINGS ERR ($Name): $_"
-    } finally {
-        # unload hive if successfully loaded
-        if ($hiveLoaded) {
-            [gc]::Collect()
-            Start-Sleep -Seconds 2
-            reg unload "HKLM\Settings" >$null 2>&1
-        }
-        # clean up temp registry file
-        if (Test-Path $tempRegPath) {
-            Remove-Item -Path $tempRegPath -Force -ErrorAction SilentlyContinue
-        }
-        # restore ErrorActionPreference
-        $ErrorActionPreference = $oldEAP
-    }
-}
-
 # ── network helper ────────────────────────────────────
 
 function Test-Network { return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue) }
@@ -324,7 +254,7 @@ $keepList = @(
     '*Microsoft.Windows.StartMenuExperienceHost*'
     '*Microsoft.WindowsCalculator*'
     '*Microsoft.WindowsNotepad*'
-    # '*Microsoft.WindowsStore*'
+    '*Microsoft.WindowsStore*'
     '*Windows.ImmersiveControlPanel*'
     '*NVIDIACorp.NVIDIAControlPanel*'
 )
@@ -337,26 +267,22 @@ function Test-ShouldKeep {
 }
 Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue |
     Where-Object { -not (Test-ShouldKeep $_.Name) } |
-    ForEach-Object {
-        try { Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction SilentlyContinue | Out-Null } catch {}
-    }
+    ForEach-Object { try { Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction SilentlyContinue | Out-Null } catch {} }
 Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
     Where-Object { -not (Test-ShouldKeep $_.DisplayName) } |
-    ForEach-Object {
-        try { Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -NoRestart -ErrorAction SilentlyContinue | Out-Null } catch {}
-    }
+    ForEach-Object { try { Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -NoRestart -ErrorAction SilentlyContinue | Out-Null } catch {} }
 
 # windows capabilities
 Write-Step 'windows capabilities'
 try {
     Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
-        $_.State -eq 'Installed'             -and
-        $_.Name  -notlike '*Ethernet*'       -and
-        $_.Name  -notlike '*WiFi*'           -and
-        $_.Name  -notlike '*Notepad*'        -and
-        $_.Name  -notlike '*NetFX3*'         -and
-        $_.Name  -notlike '*VBSCRIPT*'       -and
-        $_.Name  -notlike '*WMIC*'           -and
+        $_.State -eq 'Installed'              -and
+        $_.Name  -notlike '*Ethernet*'        -and
+        $_.Name  -notlike '*WiFi*'            -and
+        $_.Name  -notlike '*Notepad*'         -and
+        $_.Name  -notlike '*NetFX3*'          -and
+        $_.Name  -notlike '*VBSCRIPT*'        -and
+        $_.Name  -notlike '*WMIC*'            -and
         $_.Name  -notlike '*ShellComponents*'
     } | ForEach-Object {
         # Write-Step "capability: $($_.Name.Split('~')[0].ToLower())" 'run'
@@ -1184,6 +1110,8 @@ switch -regex ($selection) {
 # ── phase 4 · registry | overwrites ~400 keys covering boot optimizations, prefetch, uac, defender, edge policies, and visual effects.
 
 
+# ── phase 5 · services | overwrites ~400 keys covering boot optimizations, prefetch, uac, defender, edge policies, and visual effects.
+
 Write-Phase 'services'
 
 # removing rdyboost from lowerfilters
@@ -1981,7 +1909,7 @@ Get-ChildItem -Path "C:\Albus" -EA 0 |
 Write-Step 'clearing all event logs autonomously'
 wevtutil el | ForEach-Object { cmd /c "wevtutil cl `"$_`" 2>nul" }
 
-Write-Step 'configuring disk cleanup parameters'
+# Write-Step 'configuring disk cleanup parameters'
 $volumeCache = @(
     'Active Setup Temp Folders',
     'BranchCache',
@@ -2009,7 +1937,7 @@ $volumeCache = @(
 $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
 $volumeCache | ForEach-Object { Set-Reg "$regPath\$_" 'StateFlags1337' 2 }
 
-Write-Step 'executing automated disk cleanup'
+Write-Step 'disk cleanup'
 $null = Start-Process cleanmgr.exe -ArgumentList '/sagerun:1337' -Wait -NoNewWindow
 Start-ScheduledTask -TaskPath '\Microsoft\Windows\DiskCleanup\' -TaskName 'SilentCleanup' -EA 0
 
@@ -2032,5 +1960,7 @@ Write-Host ''
 Write-Host "  ━━━  albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m  ━━━" -ForegroundColor White
 Write-Host ''
 
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 10
 Pause
+
+# ty.
