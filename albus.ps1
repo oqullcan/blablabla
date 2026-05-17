@@ -1697,6 +1697,8 @@ Set-Reg 'HKLM:\SYSTEM\ControlSet001\Control\SafeBoot\Network\MSIServer' '' 'Serv
 
 Write-Done 'filesystem & boot'
 
+# ━━━ phase 12 | dynamically generates a true black wallpaper, forces system-wide dark mode, and aggressively strips shell animations. ━━━━━━━━━
+
 Write-Phase 'ui'
 
 # black wallpaper & lock screen
@@ -1796,8 +1798,7 @@ Remove-Item "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch" -Recurse -Fo
 
 # tray icons — promote all
 Write-Step 'promoting all tray icons'
-Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -Recurse -ErrorAction SilentlyContinue |
-    ForEach-Object { Set-ItemProperty -Path $_.PSPath -Name 'IsPromoted' -Value 1 -Force -ErrorAction SilentlyContinue }
+Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Set-ItemProperty -Path $_.PSPath -Name 'IsPromoted' -Value 1 -Force -ErrorAction SilentlyContinue }
 
 # accessibility folders — hide
 Write-Step 'hiding accessibility folders'
@@ -1816,6 +1817,8 @@ Stop-Process -Force -Name explorer -ErrorAction SilentlyContinue
 
 Write-Step 'ui applied' 'ok'
 Write-Done 'ui'
+
+# ━━━ phase 13 | eradicates all driver and software installation leftovers, leaving zero traces. ━━━━━━━━━
 
 Write-Phase 'startup cleanup'
 
@@ -1843,7 +1846,8 @@ Write-Phase 'startup cleanup'
 Write-Step 'startup entries cleared' 'ok'
 Write-Done 'startup cleanup'
 
-#  PHASE 10 · ALBUSX SERVICE
+# ━━━ phase 14 | compiles and deploys a native precision latency daemon for extreme hardware enforcement. ━━━━━━━━━
+
 Write-Phase 'albusx service'
 $SvcName = 'AlbusXSvc'
 $ExePath  = "$env:SystemRoot\AlbusX.exe"
@@ -1931,9 +1935,11 @@ if (Test-Path $ExePath) {
 
 Write-Step 'enforcing global kernel timer resolution requests'
 Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalTimerResolutionRequests' 1
+
 Write-Done 'albusx service'
 
-# phase 10 - cleanup
+# ━━━ phase 15 | purges temporary directories, clears all event logs autonomously, and flushes dns before triggering a clean reboot. ━━━━━━━━━
+
 Write-Phase 'cleanup'
 
 Write-Step 'releasing file locks'
@@ -2021,11 +2027,9 @@ Write-Done 'cleanup'
 $totalTime = [math]::Round(((Get-Date) - $TODAY).TotalMinutes, 1)
 
 Write-Host ''
-Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor DarkGray
-Write-Host "     albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m" -ForegroundColor White
-Write-Host '  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor DarkGray
+Write-Host "  ━━━  albus v$ALBUS_VERSION  ·  complete  ·  ${totalTime}m  ━━━" -ForegroundColor White
 Write-Host ''
-Write-Log "COMPLETE in ${totalTime}m"
+
 Start-Sleep -Seconds 5
 # shutdown -r -t 00
 pause
