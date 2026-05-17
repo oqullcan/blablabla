@@ -302,6 +302,7 @@ function Set-AppPackageSettings {
 
 function Test-Network { return (Test-Connection -ComputerName '1.1.1.1' -Count 3 -Quiet -ErrorAction SilentlyContinue) }
 
+<#
 # ── phase 1 · debloat | aggressively uninstalls uwp bloatware, optional features, onedrive, and executes a total structural purge of microsoft edge.
 
 Write-Phase 'debloat'
@@ -1184,3 +1185,198 @@ switch -regex ($selection) {
         Write-Done 'GPU SELECTION'
     }
 }
+
+#>
+
+# ── phase 4 · registry | overwrites ~400 keys covering boot optimizations, prefetch, uac, defender, edge policies, and visual effects.
+
+Write-Phase 'services'
+
+# removing rdyboost from lowerfilters
+$lfPath = 'HKLM:\SYSTEM\ControlSet001\Control\Class\{71a27cdd-812a-11d0-bec7-08002be2092f}'
+$lf = (Get-ItemProperty -Path $lfPath -ErrorAction SilentlyContinue).LowerFilters
+if ($lf -contains 'rdyboost') {
+    $lf = $lf | Where-Object { $_ -ne 'rdyboost' }
+    Set-ItemProperty -Path $lfPath -Name 'LowerFilters' -Value $lf
+}
+
+# ── svchost split threshold (disable split host) ──────────────
+Write-Step 'svchost split threshold'
+Set-Reg -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'SvcHostSplitThresholdInKB' -Value 0xffffffff -Type DWord -Force
+
+$config = @(
+    # telemetry & diagnostics
+    @{ Name = 'DiagTrack';                                Start = 4 }
+    @{ Name = 'dmwappushservice';                         Start = 4 }
+    @{ Name = 'diagnosticshub.standardcollector.service'; Start = 4 }
+    @{ Name = 'WerSvc';                                   Start = 4 }
+    @{ Name = 'wercplsupport';                            Start = 4 }
+    @{ Name = 'DPS';                                      Start = 4 }
+    @{ Name = 'WdiServiceHost';                           Start = 4 }
+    @{ Name = 'WdiSystemHost';                            Start = 4 }
+    @{ Name = 'troubleshootingsvc';                       Start = 4 }
+    @{ Name = 'diagsvc';                                  Start = 4 }
+    @{ Name = 'PcaSvc';                                   Start = 4 }
+    @{ Name = 'InventorySvc';                             Start = 4 }
+    # bloat
+    @{ Name = 'WpnUserService';                           Start = 4 }
+    @{ Name = 'RetailDemo';                               Start = 4 }
+    @{ Name = 'MapsBroker';                               Start = 4 }
+    @{ Name = 'wisvc';                                    Start = 4 }
+    @{ Name = 'UCPD';                                     Start = 4 }
+    @{ Name = 'GraphicsPerfSvc';                          Start = 4 }
+    @{ Name = 'Ndu';                                      Start = 4 }
+    @{ Name = 'DSSvc';                                    Start = 4 }
+    @{ Name = 'WSAIFabricSvc';                            Start = 4 }
+    # print
+    @{ Name = 'Spooler';                                  Start = 4 }
+    @{ Name = 'PrintNotify';                              Start = 4 }
+    # remote desktop
+    @{ Name = 'TermService';                              Start = 4 }
+    @{ Name = 'UmRdpService';                             Start = 4 }
+    @{ Name = 'SessionEnv';                               Start = 4 }
+    # sync
+    @{ Name = 'OneSyncSvc';                               Start = 4 }
+    @{ Name = 'CDPUserSvc';                               Start = 4 }
+    @{ Name = 'TrkWks';                                   Start = 4 }
+    # superfluous
+    @{ Name = 'RdyBoost';                                 Start = 4 }
+    @{ Name = 'SysMain';                                  Start = 4 }
+    @{ Name = 'dam';                                      Start = 4 }
+    # condrv needs auto
+    @{ Name = 'condrv';                                   Start = 2 }
+    # .
+    @{ Name = 'uhssvc';                                   Start = 2 }
+)
+
+Write-Step 'configuring services and drivers'
+foreach ($svc in $config) {
+    $Pattern = "^$($svc.Name)(_[a-fA-F0-9]{4,8})?$"
+    Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match $Pattern } |
+        ForEach-Object {
+            $matchedName = $_.PSChildName
+            if ($svc.Start -eq 4) {
+                sc.exe stop $matchedName | Out-Null
+            }
+            $startType = switch ($svc.Start) { 2 { 'auto' } 3 { 'demand' } 4 { 'disabled' } }
+            sc.exe config $matchedName start= $startType | Out-Null
+            Set-Reg $_.PSPath 'Start' $svc.Start
+        }
+}
+
+Write-Step 'disabling svchost splitting'
+Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\*' -Name 'ImagePath' -ErrorAction SilentlyContinue |
+    Where-Object { $_.ImagePath -match 'svchost\.exe' } |
+    ForEach-Object {
+        Set-Reg $_.PSPath 'SvcHostSplitDisable' 1
+    }
+
+Write-Done 'services configured'
+
+# phase 2 · scheduled tasks | wipes 16 scheduled task groups (ceip, defrag, diagnostics, telemetry).
+Write-Phase 'scheduled tasks'
+
+$paths = @(
+    '\Microsoft\Windows\Application Experience\'
+    '\Microsoft\Windows\AppxDeploymentClient\'
+    '\Microsoft\Windows\Autochk\'
+    '\Microsoft\Windows\Customer Experience Improvement Program\'
+    '\Microsoft\Windows\DiskDiagnostic\'
+    '\Microsoft\Windows\Flighting\'
+    '\Microsoft\Windows\Defrag\'
+    '\Microsoft\Windows\Power Efficiency Diagnostics\'
+    '\Microsoft\Windows\Feedback\'
+    '\Microsoft\Windows\Maintenance\'
+    '\Microsoft\Windows\Maps\'
+    '\Microsoft\Windows\SettingSync\'
+    '\Microsoft\Windows\CloudExperienceHost\'
+    '\Microsoft\Windows\DiskFootprint\'
+    '\Microsoft\Windows\WindowsAI\'
+    '\Microsoft\Windows\WDI\'
+    '\Microsoft\Windows\PI\'
+)
+
+foreach ($path in $paths) {
+    $label = $path.Trim('\').Split('\')[-1].ToLower()
+    Write-Step "$label"
+    Get-ScheduledTask -TaskPath $path -ErrorAction SilentlyContinue |
+        Where-Object { $_.State -ne 'Disabled' } |
+        Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+}
+
+Write-Done 'scheduled tasks'
+
+Write-Phase 'network configuration'
+
+Write-Step 'optimizing network interface settings'
+$ActiveNICs = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
+if ($ActiveNICs) {
+    $ActiveNICs | Disable-NetAdapterLso -IPv4 -ErrorAction SilentlyContinue | Out-Null
+    $ActiveNICs | Set-NetAdapterAdvancedProperty -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -ErrorAction SilentlyContinue | Out-Null
+
+    $Bloat = @('ms_lldp', 'ms_lltdio', 'ms_implat', 'ms_rspndr', 'ms_tcpip6', 'ms_server', 'ms_msclient')
+    foreach ($B in $Bloat) { $ActiveNICs | Disable-NetAdapterBinding -ComponentID $B -ErrorAction SilentlyContinue | Out-Null }
+
+    $TcpParams = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters'
+    Set-Reg $TcpParams 'DisableNetbiosOverTcpip' 1
+    Set-Reg "$TcpParams\Dnscache" 'EnableLLMNR' 0
+    Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters' 'DisableCoalescing' 1
+
+    foreach ($NIC in $ActiveNICs) {
+        $TargetKey = "$TcpParams\Interfaces\$($NIC.InterfaceGuid)"
+        Set-Reg $TargetKey 'TcpAckFrequency' 1
+        Set-Reg $TargetKey 'TCPNoDelay'      1
+    }
+}
+
+Write-Step 'tuning network quality of service'
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\QoS' 'Do not use NLA' '1' 'String'
+Remove-NetQosPolicy -Name 'Albus-QoS-*' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+
+$games = @(
+    'cs2.exe',
+    'r5apex.exe'
+)
+foreach ($Game in $games) {
+    $Name = "Albus-QoS-$($Game.Replace('.exe', ''))"
+    New-NetQosPolicy -Name $Name -AppPathNameMatchCondition $Game -DSCPAction 46 -NetworkProfile All -ErrorAction SilentlyContinue | Out-Null
+}
+
+Write-Step 'applying network card optimizations'
+foreach ($NIC in $ActiveNICs) {
+    $SafeID  = $NIC.InstanceID -replace '\\', '\'
+    $RegPath = Resolve-Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}\*" -ErrorAction SilentlyContinue | Where-Object {
+        (Get-ItemProperty $_.Path -Name 'DeviceInstanceID' -ErrorAction SilentlyContinue).DeviceInstanceID -eq $SafeID
+    }
+    if ($RegPath) {
+        $p = $RegPath.Path
+        $AntiSleep = @(
+            'EnablePME', '*DeviceSleepOnDisconnect', '*EEE', 'AdvancedEEE', '*SipsEnabled', 'EnableAspm', '*WakeOnMagicPacket', '*WakeOnPattern', 'AutoPowerSaveModeEnabled',
+            'EEELinkAdvertisement', 'EnableGreenEthernet', 'SavePowerNowEnabled', 'ULPMode', 'WakeOnLink', 'WakeOnSlot', '*NicAutoPowerSaver', 'PowerSaveEnable', 'EnablePowerManagement'
+        )
+        foreach ($Prop in $AntiSleep) {
+            if (Get-ItemProperty -Path $p -Name $Prop -ErrorAction SilentlyContinue) { Set-Reg $p $Prop '0' 'String' }
+        }
+        if (Get-ItemProperty -Path $p -Name 'PnPCapabilities' -ErrorAction SilentlyContinue) { Set-Reg $p 'PnPCapabilities' 24 }
+    }
+}
+
+Write-Step 'configuring tcp/ip stack'
+$tcp = @(
+    'autotuninglevel=normal',
+    'ecncapability=disabled',
+    'timestamps=disabled',
+    'initialRto=2000',
+    'rss=enabled',
+    'rsc=disabled',
+    'nonsackrttresiliency=disabled'
+)
+foreach ($cmd in $tcp) { netsh int tcp set global $cmd | Out-Null }
+
+netsh int tcp set supplemental template=internet congestionprovider=cubic | Out-Null
+
+Write-Done 'network configuration'
+
+# phase 
+# 
