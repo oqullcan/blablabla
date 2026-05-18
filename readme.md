@@ -16,8 +16,7 @@ a bare-metal windows optimization script.
 2. [usage](#usage)
 3. [what it does](#what-it-does)
 4. [albus daemon](#albus-daemon)
-5. [community](#community)
-6. [reversion](#reversion)
+5. [reversion](#reversion)
 
 ## prerequisites
 
@@ -71,12 +70,6 @@ a custom, high-precision latency controller deployed as the final optimization l
 - **network qos** — actively negotiates native udp qos, forcing dscp 46 (expedited forwarding) on all outbound realtime traffic.
 - **audio limits** — interfaces directly with `iaudioclient3` via com. overrides shared mode engine periods to their minimum hardware capabilities and runs a real-time glitch/underrun detector.
 - **clock precision** — forces and locks a 0.5ms global kernel timer resolution (`ntsettimerresolution`) with a watchdog to correct drift. completely disables processor c-states and manipulates deferred procedure call (dpc) behavior.
-
-## community
-
-i have recently established **og lab's** to cultivate a curated community around this research. while currently focused exclusively on **albuswin**, the space is designed to evolve. as the ecosystem grows, i may expand the hub to accommodate future projects or integrate the broader [2signals](https://github.com/2signals) organization.
-
-[join the discord](https://discord.gg/a4A3hhZReW)
 
 ## reversion
 
