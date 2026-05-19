@@ -159,6 +159,7 @@ namespace AlbusB
         public static ulong          Ccd0Mask          = 0;
         public static ulong          Ccd1Mask          = 0;
         public static bool           IsAmdDualCcd      = false;
+        public static bool           IsUniform         = true;
 
         public static void Detect()
         {
@@ -305,6 +306,10 @@ namespace AlbusB
                     Log.Write("[topo] AMD Dual-CCD detected. CCD0 Mask: 0x" + Ccd0Mask.ToString("X") + " CCD1 Mask: 0x" + Ccd1Mask.ToString("X"));
                 }
             });
+
+            IsUniform = !IsAmdDualCcd && 
+                        !(MaxEffClass > 0 && Cores.Exists(c => c.EfficiencyClass < MaxEffClass));
+            Log.Write("[topo] Uniform CPU: " + IsUniform);
         }
 
         static void FallbackUniform()
@@ -1203,13 +1208,20 @@ namespace AlbusB
                     // Arka plandaki gereksiz işlemci canavarlarını (Chrome, Brave, Discord vb.) yavaşlat
                     ThrottleBackgroundHogs();
 
-                    // Thread Pinning optimizasyon motorunu bu oyun için başlat
-                    Thread pinningThread = new Thread(delegate() { ThreadPinningWorker(gameContext); });
-                    pinningThread.Name = "albusbx-pinning-" + name;
-                    pinningThread.IsBackground = true;
-                    pinningThread.Priority = ThreadPriority.AboveNormal;
-                    gameContext.PinningThread = pinningThread;
-                    pinningThread.Start();
+                    // Thread Pinning optimizasyon motorunu bu oyun için başlat (Sadece E-Core veya Dual CCD varsa)
+                    if (!CpuTopology.IsUniform)
+                    {
+                        Thread pinningThread = new Thread(delegate() { ThreadPinningWorker(gameContext); });
+                        pinningThread.Name = "albusbx-pinning-" + name;
+                        pinningThread.IsBackground = true;
+                        pinningThread.Priority = ThreadPriority.AboveNormal;
+                        gameContext.PinningThread = pinningThread;
+                        pinningThread.Start();
+                    }
+                    else
+                    {
+                        Log.Write("[booster] Uniform CPU detected. Thread pinning skipped to allow Windows Scheduler full freedom.");
+                    }
 
                     Log.Write("[booster] " + name + " (PID: " + pid + ") launched. RealTime priority & Core affinity applied.");
                 }
@@ -1289,9 +1301,9 @@ namespace AlbusB
 
                         if (count == 0) return;
 
-                        // En çok CPU kullanan ana iş parçacığını bul (Game Loop / Render Thread)
+                        // En eski oluşturulmuş iş parçacığını bul (Ana İş Parçacığı / Main Thread)
                         uint mainThreadId = 0;
-                        long maxCpuTime = -1;
+                        long minCreationTime = long.MaxValue;
 
                         for (int i = 0; i < count; i++)
                         {
@@ -1301,12 +1313,9 @@ namespace AlbusB
                                 long creation, exit, kernel, user;
                                 if (GetThreadTimes(hThread, out creation, out exit, out kernel, out user))
                                 {
-                                    long totalTime = kernel + user;
-                                    long delta = GetThreadCpuTimeDelta(tIds[i], totalTime);
-
-                                    if (delta > maxCpuTime)
+                                    if (creation > 0 && creation < minCreationTime)
                                     {
-                                        maxCpuTime = delta;
+                                        minCreationTime = creation;
                                         mainThreadId = tIds[i];
                                     }
                                 }
