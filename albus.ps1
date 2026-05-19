@@ -751,6 +751,7 @@ if (Test-Network) {
         Start-Process -Wait "$ALBUS_DIR\dxwebsetup.exe" -ArgumentList '/Q' -WindowStyle Hidden
         Write-Step 'directx runtime installed' 'ok'
     } catch { Write-Step 'directx runtime failed' 'fail' }
+
 } else {
     Write-Step 'no network — skipping software installation' 'warn'
 }
@@ -1868,21 +1869,25 @@ Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalT
 
 Write-Done 'albusx service'
 
-# ━━━ phase 15 | purges temporary directories, clears all event logs autonomously, and flushes dns before triggering a clean reboot. ━━━━━━━━━
+# ━━━ Phase 15 | Engine Core Cleanup & State Normalization ━━━━━━━━━
 
 Write-Phase 'cleanup'
 
-Write-Step 'releasing file locks'
-$services = 'wuauserv', 'bits', 'appidsvc', 'dps', 'cryptsvc', 'DoSvc'
-Stop-Service -Name $services -Force -EA 0
+$vc = @(
+    'Active Setup Temp Folders','BranchCache','Delivery Optimization Files',
+    'Device Driver Packages','Downloaded Program Files','Internet Cache Files',
+    'Language Pack','Offline Pages Files','Old ChkDsk Files','Setup Log Files',
+    'System Error Memory Dump Files','System Error Minidump Files',
+    'Temporary Setup Files','Temporary Sync Files','Update Cleanup',
+    'Upgrade Discarded Files','User File Versions','Windows Defender',
+    'Windows Error Reporting Files','Windows Reset Log Files',
+    'Windows Upgrade Log Files'
+)
 
-Write-Step 'disabling reserved storage'
-try { $null = Set-WindowsReservedStorageState -State Disabled -WarningAction 0 -EA Stop } catch {
-    Write-Step 'reserved storage in use — skipped' 'warn'
-}
+$reg = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
+foreach ($c in $vc) { Set-Reg "$reg\$c" 'StateFlags1337' 2 }
 
-Write-Step 'deep cleaning cache & temp directories'
-$pathsToClean = @(
+$paths = @(
     "$env:SystemRoot\CbsTemp\*",
     "$env:SystemRoot\Logs\*",
     "$env:SystemRoot\SoftwareDistribution\*",
@@ -1900,55 +1905,34 @@ $pathsToClean = @(
     "$env:SystemDrive\Windows.old",
     "$env:SystemDrive\DumpStack.log"
 )
-Remove-Item -Path $pathsToClean -Recurse -Force -EA 0
+Remove-Item $paths -Recurse -Force -EA 0
 
-Get-ChildItem -Path "C:\Albus" -EA 0 |
-    Where-Object Name -NotMatch '(?i)^minsudo|^albus\.log$' |
-    Remove-Item -Recurse -Force -EA 0
+# 8. Çalışma alanı (engine workspace) temizliği
+Write-Step 'Purging Albus workspace'
+foreach ($f in Get-ChildItem 'C:\Albus' -EA 0) {
+    if ($f.Name -notmatch '(?i)^minsudo|^albus\.log$') {
+        Remove-Item $f.FullName -Recurse -Force -EA 0
+    }
+}
 
-Write-Step 'clearing all event logs autonomously'
-wevtutil el | ForEach-Object { cmd /c "wevtutil cl `"$_`" 2>nul" }
+Write-Step 'Executing disk cleanup'
+Start-Process cleanmgr.exe '/sagerun:1337' -Wait -NoNewWindow
+Start-ScheduledTask '\Microsoft\Windows\DiskCleanup\' 'SilentCleanup' -EA 0
 
-# Write-Step 'configuring disk cleanup parameters'
-$volumeCache = @(
-    'Active Setup Temp Folders',
-    'BranchCache',
-    'Delivery Optimization Files',
-    'Device Driver Packages',
-    'Downloaded Program Files',
-    'Internet Cache Files',
-    'Language Pack',
-    'Offline Pages Files',
-    'Old ChkDsk Files',
-    'Setup Log Files',
-    'System Error Memory Dump Files',
-    'System Error Minidump Files',
-    'Temporary Setup Files',
-    'Temporary Sync Files',
-    'Update Cleanup',
-    'Upgrade Discarded Files',
-    'User File Versions',
-    'Windows Defender',
-    'Windows Error Reporting Files',
-    'Windows Reset Log Files',
-    'Windows Upgrade Log Files'
-)
+Write-Step 'flushing network caches'
+ipconfig /flushdns >$NULL 2>&1
+arp -d * >$NULL 2>&1
 
-$regPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
-$volumeCache | ForEach-Object { Set-Reg "$regPath\$_" 'StateFlags1337' 2 }
+# 9. Performans sayaçlarını yeniden oluşturma
+Write-Step 'Rebuilding performance counters'
+$cwd = Get-Location
+foreach ($d in 'System32','SysWOW64') {
+    Set-Location "$env:SystemRoot\$d"
+    lodctr /R >$null 2>&1
+}
+Set-Location $cwd
 
-Write-Step 'disk cleanup'
-$null = Start-Process cleanmgr.exe -ArgumentList '/sagerun:1337' -Wait -NoNewWindow
-Start-ScheduledTask -TaskPath '\Microsoft\Windows\DiskCleanup\' -TaskName 'SilentCleanup' -EA 0
-
-Write-Step 'flushing dns & resetting network cache'
-$null = ipconfig /flushdns 2>&1
-$null = arp -d * 2>&1
-
-Write-Step 'rebuilding performance counters'
-'system32', 'sysWOW64' | ForEach-Object { Set-Location "$env:SystemRoot\$_"; $null = lodctr /R 2>&1 }
-
-Write-Done 'cleanup'
+Write-Done 'Cleanup'
 
 # ════════════════════════════════════════════════════════════
 #  DONE
