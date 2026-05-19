@@ -326,7 +326,9 @@ namespace AlbusB
 
         internal sealed class SimpleHashSet<T>
         {
-            readonly Dictionary<T, bool> _d = new Dictionary<T, bool>();
+            readonly Dictionary<T, bool> _d;
+            public SimpleHashSet() { _d = new Dictionary<T, bool>(); }
+            public SimpleHashSet(IEqualityComparer<T> comparer) { _d = new Dictionary<T, bool>(comparer); }
             public bool Contains(T v) { return _d.ContainsKey(v); }
             public void Add(T v)      { _d[v] = true; }
             public void Clear()       { _d.Clear(); }
@@ -1075,7 +1077,7 @@ namespace AlbusB
                 uint pid = (uint)Marshal.ReadInt32(record.UserData, 0);
                 string img = Marshal.PtrToStringUni(IntPtr.Add(record.UserData, nameOffset));
                 if (img == null) return;
-                img = System.IO.Path.GetFileName(img).ToLowerInvariant();
+                img = System.IO.Path.GetFileName(img);
                 if (string.IsNullOrEmpty(img)) return;
 
                 var tgts = processNamesSet;
@@ -1125,7 +1127,7 @@ namespace AlbusB
                 ManagementBaseObject proc =
                     (ManagementBaseObject)e.NewEvent.Properties["TargetInstance"].Value;
                 uint   pid  = (uint)proc.Properties["ProcessId"].Value;
-                string name = proc.Properties["Name"].Value.ToString().ToLowerInvariant();
+                string name = proc.Properties["Name"].Value.ToString();
                 ThreadPool.QueueUserWorkItem(delegate { ProcessStarted(pid, name); });
             });
         }
@@ -1143,7 +1145,7 @@ namespace AlbusB
                 PurgeStandbyList();
                 GhostMemory();
 
-                IntPtr hProcess = OpenProcess(SYNCHRONIZE | PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                IntPtr hProcess = OpenProcess(SYNCHRONIZE | PROCESS_SET_INFORMATION | PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
                 if (hProcess != IntPtr.Zero)
                 {
                     gameContext = new ActiveGameContext
@@ -1178,6 +1180,22 @@ namespace AlbusB
                     powerThrottling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
                     powerThrottling.StateMask = 0; // Throttling disable
                     SetProcessInformation(hProcess, ProcessPowerThrottling, ref powerThrottling, Marshal.SizeOf(powerThrottling));
+                    
+                    // Priority boost aktif et (boosting serbest bırak)
+                    SetProcessPriorityBoost(hProcess, false);
+
+                    Safe.Run("game_ws_lock", () =>
+                    {
+                        SetProcessWorkingSetSizeEx(hProcess,
+                            (UIntPtr)(256 * 1024 * 1024),
+                            (UIntPtr)(32UL * 1024 * 1024 * 1024),
+                            QUOTA_LIMITS_HARDWS_MIN_ENABLE);
+                    });
+
+                    Safe.Run("purge_file_cache", () =>
+                    {
+                        SetSystemFileCacheSize((IntPtr)(-1), (IntPtr)(-1), 0);
+                    });
 
                     // Alt süreçleri de önceliklendir
                     ApplyToChildren(pid);
@@ -1399,6 +1417,17 @@ namespace AlbusB
                                         {
                                             SetProcessAffinityMask(hChild, (UIntPtr)CpuTopology.AllPCoreMask);
                                         }
+
+                                        // Priority boost aktif et
+                                        SetProcessPriorityBoost(hChild, false);
+
+                                        // EcoQoS (Power Throttling) kapat
+                                        PROCESS_POWER_THROTTLING powerThrottling;
+                                        powerThrottling.Version = 1;
+                                        powerThrottling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+                                        powerThrottling.StateMask = 0; // Throttling disable
+                                        SetProcessInformation(hChild, ProcessPowerThrottling, ref powerThrottling, Marshal.SizeOf(powerThrottling));
+
                                         CloseHandle(hChild);
                                     }
                                 });
@@ -1499,7 +1528,7 @@ namespace AlbusB
             return false;
         }
 
-        void SetBackgroundHogsPriority(uint priorityClass)
+        void SetBackgroundHogsPriority(uint priorityClass, uint memoryPriority, uint ioPriority)
         {
             IntPtr hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (hSnap == new IntPtr(-1) || hSnap == IntPtr.Zero) return;
@@ -1521,6 +1550,15 @@ namespace AlbusB
                                 if (h != IntPtr.Zero)
                                 {
                                     SetPriorityClass(h, priorityClass);
+
+                                    MEMORY_PRIORITY_INFORMATION memInfo;
+                                    memInfo.MemoryPriority = memoryPriority;
+                                    SetProcessInformation(h, ProcessMemoryPriority, ref memInfo, Marshal.SizeOf(memInfo));
+
+                                    IO_PRIORITY_INFO ioInfo;
+                                    ioInfo.IoPriority = ioPriority;
+                                    SetProcessInformation(h, ProcessIoPriority, ref ioInfo, Marshal.SizeOf(ioInfo));
+
                                     CloseHandle(h);
                                 }
                             }
@@ -1542,8 +1580,8 @@ namespace AlbusB
         {
             Safe.Run("throttle_bg", () =>
             {
-                SetBackgroundHogsPriority(BELOW_NORMAL_PRIORITY_CLASS);
-                Log.Write("[booster] Background browser, Discord and explorer processes throttled to BelowNormal.");
+                SetBackgroundHogsPriority(BELOW_NORMAL_PRIORITY_CLASS, 1, 0); // Bellek: 1 (Çok Düşük), IO: 0 (Çok Düşük)
+                Log.Write("[booster] Background processes throttled to BelowNormal, Low Memory & Low I/O Priority.");
             });
         }
 
@@ -1551,7 +1589,7 @@ namespace AlbusB
         {
             Safe.Run("restore_bg", () =>
             {
-                SetBackgroundHogsPriority(NORMAL_PRIORITY_CLASS);
+                SetBackgroundHogsPriority(NORMAL_PRIORITY_CLASS, 5, 2); // Bellek: 5 (Normal), IO: 2 (Normal)
                 Log.Write("[booster] Background processes restored to Normal priority.");
             });
         }
@@ -1739,7 +1777,7 @@ namespace AlbusB
             if (names.Count > 0)
             {
                 processNames = names;
-                processNamesSet = new CpuTopology.SimpleHashSet<string>();
+                processNamesSet = new CpuTopology.SimpleHashSet<string>(StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < names.Count; i++)
                 {
                     processNamesSet.Add(names[i]);
@@ -1812,6 +1850,14 @@ namespace AlbusB
         [DllImport("kernel32.dll")]
         static extern bool SetProcessInformation(IntPtr h, int cls,
             ref PROCESS_POWER_THROTTLING info, int sz);
+        [DllImport("kernel32.dll")]
+        static extern bool SetProcessInformation(IntPtr h, int cls,
+            ref MEMORY_PRIORITY_INFORMATION info, int sz);
+        [DllImport("kernel32.dll")]
+        static extern bool SetProcessInformation(IntPtr h, int cls,
+            ref IO_PRIORITY_INFO info, int sz);
+        [DllImport("kernel32.dll")]
+        static extern bool SetProcessPriorityBoost(IntPtr hProcess, bool disablePriorityBoost);
         [DllImport("kernel32.dll")] static extern uint   SetThreadExecutionState(uint f);
         [DllImport("kernel32.dll")]
         static extern bool SetProcessWorkingSetSizeEx(IntPtr h, UIntPtr min, UIntPtr max, uint f);
@@ -1863,6 +1909,7 @@ namespace AlbusB
         // Sabitler
         const uint SYNCHRONIZE                              = 0x00100000u;
         const uint PROCESS_SET_INFORMATION                  = 0x0200u;
+        const uint PROCESS_SET_QUOTA                        = 0x0100u;
         const uint PROCESS_QUERY_LIMITED_INFORMATION        = 0x1000u;
         const uint THREAD_SET_INFORMATION                   = 0x0020u;
         const uint THREAD_QUERY_INFORMATION                 = 0x0040u;
@@ -1883,6 +1930,8 @@ namespace AlbusB
         const int  ProcessPowerThrottling                   = 4;
         const uint PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x4u;
         const int  ThreadPowerThrottling                    = 3;
+        const int  ProcessMemoryPriority                     = 39;
+        const int  ProcessIoPriority                         = 2;
         const int  THREAD_PRIORITY_TIME_CRITICAL            = 15;
         const int  THREAD_PRIORITY_HIGHEST                  = 2;
         const int  EDataFlow_eRender                        = 0;
@@ -1897,6 +1946,12 @@ namespace AlbusB
 
         [StructLayout(LayoutKind.Sequential)]
         struct PROCESS_POWER_THROTTLING { public uint Version, ControlMask, StateMask; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MEMORY_PRIORITY_INFORMATION { public uint MemoryPriority; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct IO_PRIORITY_INFO { public uint IoPriority; }
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         struct WAVEFORMATEX
